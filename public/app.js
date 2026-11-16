@@ -957,6 +957,7 @@ function publishIssue(value) {
   const existing = state.history.find((record) => record.videoId === state.video?.id && ['posting', 'posted', 'uncertain'].includes(record.status));
   if (existing) {
     if (existing.status === 'posted') return '이 영상에 게시한 기록이 있습니다. 영상당 답글은 1개까지입니다.';
+    if (existing.source === 'public') return '직접 게시 확인이 진행 중입니다. 아래 기록의 게시 확인을 완료하거나, 올리지 않았다면 예약을 취소하세요.';
     return '이 영상에 게시 진행 또는 확인 보류 기록이 있습니다.';
   }
   if (state.limits && state.limits.used >= state.limits.max) return '오늘 게시 한도에 도달했습니다.';
@@ -1257,6 +1258,7 @@ function openReview(confirmation) {
   byId('open-original').href = watchLink(payload.videoId, payload.parentId);
   byId('manual-handoff').hidden = !record;
   byId('verify-publish').hidden = !record;
+  byId('abandon-manual').hidden = !record;
   byId('retry-publish').hidden = true;
   byId('cancel-publish').textContent = confirmation.handedOff ? '닫기' : '취소';
   status('global-status');
@@ -1269,6 +1271,7 @@ function setPublishing(busy) {
   byId('cancel-publish').disabled = busy;
   byId('retry-publish').disabled = busy;
   byId('verify-publish').disabled = busy;
+  byId('abandon-manual').disabled = busy;
   byId('copy-reply').disabled = busy;
   renderReplyControls();
 }
@@ -1297,6 +1300,7 @@ async function prepareManualReply() {
     if (record.status === 'uncertain') markHandoff();
     byId('manual-handoff').hidden = false;
     byId('verify-publish').hidden = false;
+    byId('abandon-manual').hidden = false;
     status('publish-status', record.message, record.status === 'uncertain' ? 'warn' : '');
   } catch (error) {
     updateRecord(error.record);
@@ -1470,10 +1474,53 @@ byId('copy-reply').addEventListener('click', async () => {
   }
 });
 
+function showVerifiedManualReply(confirmation, result) {
+  const { item } = confirmation;
+  const { record, reply } = result;
+  if (item && reply && !item.replies.has(reply.id)) {
+    item.replies.set(reply.id, reply);
+    item.thread.replyCount = Math.max(item.thread.replyCount, item.replies.size);
+    replyDetails(item);
+    renderReplyList(item);
+    item.replyDetails.open = true;
+  }
+  state.drafts.delete(record.videoId + ':' + record.parentId);
+  if (state.video?.id === record.videoId && state.ready?.thread.parentId === record.parentId) state.ready = null;
+  if (item && state.selected === item) closeComposer();
+  dialog.close();
+  status('global-status', 'YouTube에서 게시된 답글을 확인해 기록했습니다.', 'success');
+}
+
+byId('abandon-manual').addEventListener('click', async () => {
+  const confirmation = state.confirmation;
+  if (state.posting || confirmation?.record?.source !== 'public') return;
+  if (!window.confirm('YouTube에서 이 답글을 게시하지 않았고 입력창도 닫았나요? 확인하면 공개 답글을 다시 조회한 뒤 게시 예약을 취소합니다.')) return;
+  setPublishing(true);
+  status('publish-status', '게시된 답글이 있는지 다시 확인하는 중입니다…');
+  try {
+    const result = await api('/api/public/replies/abandon', { recordId: confirmation.record.id, notPosted: true });
+    confirmation.record = result.record;
+    updateRecord(result.record);
+    if (result.record.status === 'posted') {
+      showVerifiedManualReply(confirmation, result);
+    } else if (result.record.status === 'failed') {
+      dialog.close();
+      status('global-status', '예약을 취소했습니다. Chrome 프로필로 게시할 수 있습니다.', 'success');
+    } else {
+      status('publish-status', result.message || result.record.message, 'warn');
+    }
+  } catch (error) {
+    updateRecord(error.record);
+    status('publish-status', error.message, 'error');
+  } finally {
+    endPublishing();
+  }
+});
+
 byId('verify-publish').addEventListener('click', async () => {
   const confirmation = state.confirmation;
   if (!confirmation?.record || state.posting) return;
-  const { record, item } = confirmation;
+  const { record } = confirmation;
   markHandoff();
   setPublishing(true);
   status('publish-status', 'YouTube에서 새 답글을 확인하는 중입니다…');
@@ -1485,19 +1532,7 @@ byId('verify-publish').addEventListener('click', async () => {
       status('publish-status', result.message || result.record.message || '아직 공개 답글에서 찾지 못했습니다. 잠시 뒤 다시 확인하세요.', 'warn');
       return;
     }
-    const { reply } = result;
-    if (item && reply && !item.replies.has(reply.id)) {
-      item.replies.set(reply.id, reply);
-      item.thread.replyCount = Math.max(item.thread.replyCount, item.replies.size);
-      replyDetails(item);
-      renderReplyList(item);
-      item.replyDetails.open = true;
-    }
-    state.drafts.delete(record.videoId + ':' + record.parentId);
-    if (state.video?.id === record.videoId && state.ready?.thread.parentId === record.parentId) state.ready = null;
-    if (item && state.selected === item) closeComposer();
-    dialog.close();
-    status('global-status', 'YouTube에서 게시된 답글을 확인해 기록했습니다.', 'success');
+    showVerifiedManualReply(confirmation, result);
   } catch (error) {
     updateRecord(error.record);
     status('publish-status', error.message, 'error');

@@ -168,8 +168,8 @@
         </div>
         <div class="actions">
           <button class="button" id="choose-publish-target" type="button">선택하기</button>
-          <button class="button" id="profile-publish" type="button" disabled>Chrome 프로필로 게시</button>
-          <button class="button primary" id="start-publish" type="button" disabled>게시</button>
+          <button class="button primary" id="profile-publish" type="button" disabled>Chrome 프로필로 게시</button>
+          <button class="button" id="start-publish" type="button" disabled>직접 게시 후 확인</button>
         </div>
       </div>
       <div id="history-records">
@@ -259,7 +259,7 @@
   </dialog>
 
   <dialog id="review-dialog" aria-labelledby="review-title">
-    <div class="dialog-heading"><h2 id="review-title">대댓글 게시 확인</h2></div>
+    <div class="dialog-heading"><h2 id="review-title">YouTube에서 직접 게시 후 확인</h2></div>
     <p id="review-video" class="dialog-video"></p>
     <div class="quoted"><strong id="review-parent-author"></strong><p id="review-parent-text"></p></div>
     <div class="review-text"><span class="hint">게시할 답글</span><p id="review-text"></p></div>
@@ -273,6 +273,7 @@
     <p id="publish-status" class="status" role="status" hidden></p>
     <div class="actions dialog-actions">
       <button id="cancel-publish" class="button" type="button">취소</button>
+      <button id="abandon-manual" class="button" type="button" hidden>미게시 확인 후 예약 취소</button>
       <button id="retry-publish" class="button primary" type="button" hidden>다시 시도</button>
       <button id="verify-publish" class="button primary" type="button" hidden>게시 확인</button>
     </div>

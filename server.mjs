@@ -239,8 +239,11 @@ function reservedReply(store, details, source, baseline = null) {
   return { record: publicRecord(record) };
 }
 
-async function verifyPublicReply(store, reader, body) {
+async function verifyPublicReply(store, reader, body, abandon = false) {
   const recordId = checkId(body.recordId, requestPattern, '게시 기록을 찾을 수 없습니다.');
+  if (abandon && body.notPosted !== true) {
+    throw new StudioError(400, 'postingNotConfirmed', 'YouTube에서 답글을 게시하지 않았는지 먼저 확인해 주세요.');
+  }
   let record = store.findRecord(recordId);
   if (!record?.requestId?.startsWith('public:')) {
     throw new StudioError(404, 'recordNotFound', '공개 댓글 게시 기록을 찾을 수 없습니다.');
@@ -252,8 +255,14 @@ async function verifyPublicReply(store, reader, body) {
   }
   const baseline = new Set(JSON.parse(check.baseline));
   let replies;
+  let hasMore;
   try {
-    ({ replies } = await reader.replies(record.videoId, record.parentId, { fresh: true }));
+    const result = await reader.replies(record.videoId, record.parentId, { fresh: true });
+    if (!Array.isArray(result?.replies)) {
+      throw new StudioError(502, 'replyReadIncomplete', 'YouTube의 답글 목록을 읽지 못했습니다.');
+    }
+    replies = result.replies;
+    hasMore = Boolean(result.nextPageToken);
   } catch (error) {
     const message = errorForResponse(error).message;
     const updated = store.finish(recordId, 'uncertain', message);
@@ -265,10 +274,23 @@ async function verifyPublicReply(store, reader, body) {
   if (!['posting', 'uncertain'].includes(record.status)) {
     throw new StudioError(409, 'recordClosed', '이 게시 기록은 다시 확인할 수 없습니다.', record);
   }
-  const matches = replies.filter((reply) => commentPattern.test(reply.id ?? '') && reply.id !== record.parentId &&
+  const newRepliesWithText = replies.filter((reply) => commentPattern.test(reply.id ?? '') && reply.id !== record.parentId &&
     reply.parentId === record.parentId && !baseline.has(reply.id) && chromeText(reply.author, 250) &&
-    typeof reply.text === 'string' && reply.text.trim() === record.text &&
-    freshPublicReply(reply, Date.parse(check.startedAt)));
+    typeof reply.text === 'string' && reply.text.trim() === record.text);
+  const matches = newRepliesWithText.filter((reply) => freshPublicReply(reply, Date.parse(check.startedAt)));
+  if (abandon && matches.length !== 1) {
+    if (hasMore || newRepliesWithText.length) {
+      const message = '같은 문구의 답글이나 추가 목록이 있어 취소할 수 없습니다. YouTube에서 게시 여부를 확인해 주세요.';
+      return { record: publicRecord(store.finish(recordId, 'uncertain', message)), message };
+    }
+    if (store.findPublicCheck(recordId)?.startedAt !== check.startedAt) {
+      throw new StudioError(409, 'recordClosed', '이 게시 기록은 다시 확인할 수 없습니다.', record);
+    }
+    const message = 'YouTube에서 같은 문구의 새 답글이 확인되지 않아 게시 준비를 취소했습니다.';
+    const updated = store.finish(recordId, 'failed', message);
+    if (updated.status === 'posted') return { record: publicRecord(updated), reply: JSON.parse(updated.replyJson) };
+    return { record: publicRecord(updated), message };
+  }
   if (matches.length !== 1) {
     const message = matches.length > 1 ? '같은 본문의 새 답글이 여러 개 보여 게시를 확인할 수 없습니다.'
       : '아직 공개 댓글에서 새 답글을 확인하지 못했습니다. YouTube에 게시한 뒤 다시 확인하세요.';
@@ -542,6 +564,9 @@ export async function startStudio({
     }
     if (method === 'POST' && url.pathname === '/api/public/replies/verify') {
       return output(response, 200, await verifyPublicReply(store, publicReader, await readBody(request)));
+    }
+    if (method === 'POST' && url.pathname === '/api/public/replies/abandon') {
+      return output(response, 200, await verifyPublicReply(store, publicReader, await readBody(request), true));
     }
     if (method === 'POST' && url.pathname === '/api/chrome/drafts') {
       const details = readChromeTarget(await readBody(request), false);

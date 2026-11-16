@@ -11,6 +11,7 @@
   const repliesSelector = 'ytd-comment-replies-renderer, yt-comment-replies-view-model';
   const buttonSelector = 'button, [role="button"], tp-yt-paper-button';
   const composerSelector = 'ytd-comment-reply-dialog-renderer, ytd-comment-simplebox-renderer, yt-comment-composer-view-model, #reply-dialog';
+  const topLevelBoxSelector = 'ytd-comment-simplebox-renderer, yt-comment-simplebox-view-model, :is(ytd-comments-header-renderer, yt-comments-header-view-model) #simple-box';
   const submitSelector = '#submit-button, #submit-button-end';
   const cancelSelector = '#cancel-button, #cancel-button-end';
   const imageHosts = new Set(['i.ytimg.com', 'i9.ytimg.com', 'img.youtube.com', 'yt3.ggpht.com', 'yt3.googleusercontent.com', 'lh3.googleusercontent.com']);
@@ -220,9 +221,8 @@
     };
   }
 
-  function findThread(videoId, parentId) {
+  function findThread(videoId, parentId, root = commentsRoot()) {
     if (!isId(parentId, commentPattern)) return null;
-    const root = commentsRoot();
     if (!root) return null;
     const matches = threadRoots(root).filter((thread) => {
       const node = originalNode(thread);
@@ -233,7 +233,7 @@
 
   function unavailable(root) {
     const message = renderedText(root?.querySelector('#message, ytd-message-renderer, #message-text'));
-    return /댓글.{0,12}(?:사용 중지|꺼져|비활성)|comments?.{0,16}(?:turned off|disabled|unavailable)/i.test(message);
+    return /댓글.{0,12}(?:사용\s*중지|일시\s*중지|꺼져|비활성)|comments?.{0,16}(?:turned off|disabled|unavailable|paused)/i.test(message);
   }
 
   function continuation(root) {
@@ -395,25 +395,50 @@
     return /(?:just now|moments? ago|\b\d{1,2} seconds? ago\b|\b1 minute ago\b|방금|\d{1,2}\s*초 전|1\s*분 전)/i.test(renderedText(published));
   }
 
+  function publishCommentsRoot(videoId) {
+    const roots = [...document.querySelectorAll(commentsSelector)].filter((root) => {
+      if (!visible(root)) return false;
+      const watch = root.closest('ytd-watch-flexy[video-id]');
+      return !watch || watch.getAttribute('video-id') === videoId;
+    });
+    const outerRoots = roots.filter((root) => !roots.some((other) => other !== root && other.contains(root)));
+    return outerRoots.length === 1 ? outerRoots[0] : null;
+  }
+
+  function topLevelBox(root, control) {
+    const box = control?.closest(topLevelBoxSelector);
+    return box && root.contains(box) && !control.closest(threadSelector) ? box : null;
+  }
+
+  function singleVisible(items) {
+    const matches = [...new Set(items)].filter(visible);
+    return matches.length === 1 ? matches[0] : null;
+  }
+
   function topLevelEditor(root) {
-    const field = '[contenteditable="true"]';
-    const composer = 'ytd-comment-simplebox-renderer, yt-comment-simplebox-view-model';
-    return [...root.querySelectorAll(field)].find((editor) =>
-      editor.closest(composer) && !editor.closest(threadSelector) && visible(editor));
+    const fields = root.querySelectorAll('[contenteditable="true"], [contenteditable="plaintext-only"]');
+    return singleVisible([...fields].filter((field) => topLevelBox(root, field)));
   }
 
   function topLevelPlaceholder(root) {
-    const placeholder = '#simplebox-placeholder, #placeholder-area, #placeholder-text';
-    return [...root.querySelectorAll(placeholder)].find((item) =>
-      !item.closest(threadSelector) && item.closest('ytd-comment-simplebox-renderer, yt-comment-simplebox-view-model') &&
-      visible(item));
+    for (const selector of ['#placeholder-area', '#simplebox-placeholder, #placeholder-text']) {
+      const preferred = [...root.querySelectorAll(selector)].filter((item) => topLevelBox(root, item));
+      const visiblePreferred = preferred.filter(visible);
+      if (visiblePreferred.length) return singleVisible(visiblePreferred);
+    }
+    return singleVisible([...root.querySelectorAll(buttonSelector)].filter((button) => {
+      if (!topLevelBox(root, button) || !enabled(button)) return false;
+      const label = plain(button.getAttribute('aria-label') || renderedText(button));
+      return /^(?:댓글(?:을)?\s*(?:추가|작성)(?:하기)?|add\s+(?:a\s+)?(?:public\s+)?comment)\s*[.…]*$/iu.test(label);
+    }));
   }
 
-  function typedSubmit(editor, root) {
-    const scope = editor.closest('ytd-comment-simplebox-renderer, yt-comment-simplebox-view-model');
-    if (!scope) return editorButton(editor, submitSelector);
-    return [...scope.querySelectorAll(buttonSelector)].find((button) =>
-      button.closest(submitSelector) && root.contains(button) && enabled(button));
+  function typedSubmit(editor, root, thread) {
+    if (thread) return editorButton(editor, submitSelector);
+    const box = topLevelBox(root, editor);
+    if (!box) return null;
+    return singleVisible([...box.querySelectorAll(buttonSelector)].filter((button) =>
+      topLevelBox(root, button) === box && button.closest(submitSelector) && enabled(button)));
   }
 
   function commentNodesForPublish(root, thread) {
@@ -436,31 +461,40 @@
     const expected = plain(text);
     const account = await waitFor(() => currentVideo(videoId) && accountAvatar(), 2600);
     if (!account) return failed('YouTube에 로그인한 Chrome 프로필에서 시도해 주세요.');
-    const root = await waitFor(() => currentVideo(videoId) && commentsRoot(), 3200);
-    if (!root || !currentVideo(videoId) || unavailable(root)) {
-      return failed('이 영상에 열린 댓글창을 찾을 수 없습니다.');
-    }
-
-    root.scrollIntoView({ block: 'start', behavior: 'instant' });
-    const thread = parentId
-      ? await waitFor(() => currentVideo(videoId) && findThread(videoId, parentId), 4600)
-      : null;
-    if (parentId && !thread) return failed('선택한 원댓글이 현재 영상에서 열리지 않았습니다.');
+    let scrolledRoot;
+    const prepared = await waitFor(() => {
+      if (!currentVideo(videoId)) return failed('댓글을 열기 전에 영상이 바뀌었습니다.');
+      const root = publishCommentsRoot(videoId);
+      if (!root) return null;
+      if (unavailable(root)) return failed('YouTube에서 이 영상의 댓글이 꺼져 있거나 일시중지되어 있습니다.');
+      const bounds = root.getBoundingClientRect();
+      if (root !== scrolledRoot || bounds.top >= window.innerHeight || bounds.bottom <= 0) {
+        root.scrollIntoView({ block: 'start', behavior: 'instant' });
+        scrolledRoot = root;
+      }
+      const thread = parentId ? findThread(videoId, parentId, root) : null;
+      if (parentId && !thread) return null;
+      const editor = thread ? editorIn(thread) : topLevelEditor(root);
+      const open = editor ? null : thread ? replyButton(originalNode(thread)) : topLevelPlaceholder(root);
+      return editor || open ? { root, thread, editor, open } : null;
+    });
+    if (prepared?.status === 'failed') return prepared;
+    if (!prepared) return failed(parentId
+      ? '선택한 원댓글에서 답글 입력창을 찾지 못했습니다. YouTube에서 답글 버튼이 보이는지 확인해 주세요.'
+      : '이 영상에서 새 댓글 입력창을 찾지 못했습니다. YouTube에서 댓글 추가 버튼이 보이는지 확인해 주세요.');
+    const { root, thread, open } = prepared;
     const editorNow = () => thread ? editorIn(thread) : topLevelEditor(root);
-    let editor = editorNow();
+    let { editor } = prepared;
     if (editor && renderedText(editor)) return failed('이 영상에 먼저 작성 중인 댓글을 확인해 주세요.');
     const baseline = new Set(commentNodesForPublish(root, thread).map((node) => permalink(node, videoId)).filter(Boolean));
+    const correctTarget = () => currentVideo(videoId) && publishCommentsRoot(videoId) === root &&
+      (!thread || findThread(videoId, parentId, root) === thread);
     if (!editor) {
-      const open = thread
-        ? replyButton(originalNode(thread))
-        : await waitFor(() => currentVideo(videoId) && topLevelPlaceholder(root), 3400);
-      if (!open || !currentVideo(videoId)) return failed('현재 영상에서 댓글 입력창을 열 수 없습니다.');
+      if (!correctTarget() || !visible(open)) return failed('댓글 입력창을 열기 전에 대상이 바뀌었습니다.');
       open.scrollIntoView({ block: 'center', behavior: 'instant' });
       open.click();
-      editor = await waitFor(() => currentVideo(videoId) && editorNow(), 3200);
+      editor = await waitFor(() => correctTarget() && editorNow(), 3200);
     }
-    const correctTarget = () => currentVideo(videoId) && commentsRoot() === root &&
-      (!thread || findThread(videoId, parentId) === thread);
     if (!editor || !correctTarget() || renderedText(editor)) {
       return failed('선택한 대상의 빈 댓글 입력창을 확인하지 못했습니다.');
     }
@@ -480,7 +514,7 @@
       await new Promise((resolve) => setTimeout(resolve, 32));
     }
 
-    const submit = typedSubmit(editor, root);
+    const submit = typedSubmit(editor, root, thread);
     if (!correctTarget() || editorNow() !== editor || renderedText(editor) !== expected || !submit || !enabled(submit)) {
       return failed('완성된 문구와 게시 버튼을 함께 확인하지 못했습니다.');
     }
