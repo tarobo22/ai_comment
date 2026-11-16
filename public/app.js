@@ -501,7 +501,7 @@ function setGenerationSelected(item, selected, text = '') {
   let entry = state.generations.get(thread.parentId);
   if (Boolean(entry?.selected) !== selected) state.generationSelectionChanged = true;
   if (!entry && selected) {
-    entry = { thread, selected, text, approach: '', settings: null, options: null, candidate: null };
+    entry = { thread, selected, text, approach: '', settings: null, optionsOpen: false, overrideSettings: null, candidate: null };
     state.generations.set(thread.parentId, entry);
   }
   if (entry) {
@@ -567,10 +567,22 @@ function scoreSetting(label, start, end, value, change) {
 }
 
 function individualSettings(entry) {
-  const options = entry.options;
+  const options = entry.overrideSettings ?? state.generationSettings;
   const settings = node('div', 'generation-settings generation-card-settings');
   const toneType = node('fieldset', 'generation-audience');
   const choices = node('div', 'choice-row');
+  const useCommon = generationButton('공통 설정 사용', () => {
+    entry.overrideSettings = null;
+    focusDraftCard(entry, '.generation-card-settings input');
+  });
+  useCommon.disabled ||= !entry.overrideSettings;
+  function setOverride(key, value) {
+    const current = entry.overrideSettings ?? state.generationSettings;
+    if (current[key] === value) return;
+    entry.overrideSettings = { ...current, [key]: value };
+    useCommon.disabled = false;
+  }
+
   for (const [value, label] of Object.entries(toneTypeLabels)) {
     const choice = node('label');
     const radio = node('input');
@@ -579,15 +591,18 @@ function individualSettings(entry) {
     radio.value = value;
     radio.checked = options.audience === value;
     radio.disabled = state.generating;
-    radio.addEventListener('change', () => { options.audience = value; });
+    radio.addEventListener('change', () => setOverride('audience', value));
     choice.append(radio, node('span', '', label));
     choices.append(choice);
   }
   toneType.append(node('legend', '', '말투 유형'), choices);
+  const actions = node('div', 'actions');
+  actions.append(useCommon);
   settings.append(
-    scoreSetting('말투 온도', '냉정함', '따뜻함', options.tone, (value) => { options.tone = value; }),
-    scoreSetting('답변 방향', '공감', '해결', options.message, (value) => { options.message = value; }),
-    toneType
+    scoreSetting('말투 온도', '냉정함', '따뜻함', options.tone, (value) => setOverride('tone', value)),
+    scoreSetting('답변 방향', '공감', '해결', options.message, (value) => setOverride('message', value)),
+    toneType,
+    actions
   );
   return settings;
 }
@@ -684,13 +699,14 @@ function generationCard(entry) {
   });
   edit.dataset.action = 'edit';
   edit.disabled ||= entry.editText !== undefined;
-  const settings = generationButton(entry.options ? '개별 설정 닫기' : '개별 설정', () => {
-    entry.options = entry.options ? null : { ...(entry.settings ?? state.generationSettings) };
-    focusDraftCard(entry, entry.options ? '.generation-card-settings input' : '[data-action="settings"]');
+  const settings = generationButton(entry.optionsOpen ? '개별 설정 닫기' : '개별 설정', () => {
+    entry.optionsOpen = !entry.optionsOpen;
+    focusDraftCard(entry, entry.optionsOpen ? '.generation-card-settings input' : '[data-action="settings"]');
   });
   settings.dataset.action = 'settings';
+  settings.setAttribute('aria-expanded', String(entry.optionsOpen));
   const regenerate = generationButton(entry.text ? '재생성' : '제작', () => {
-    void generateDrafts([entry], entry.options ?? entry.settings ?? state.generationSettings, true);
+    void generateDrafts([entry], true);
   });
   regenerate.disabled ||= entry.editText !== undefined;
   actions.append(edit, settings, regenerate);
@@ -706,7 +722,7 @@ function generationCard(entry) {
     if (issue) card.append(node('p', 'hint', issue));
   }
   card.append(actions);
-  if (entry.options) card.append(individualSettings(entry));
+  if (entry.optionsOpen) card.append(individualSettings(entry));
   if (entry.editText !== undefined) {
     const editor = node('div', 'generation-card-editor');
     const field = node('textarea');
@@ -753,7 +769,7 @@ function generationCard(entry) {
       }),
       generationButton('새 답글 적용', () => {
         applyDraft(entry, entry.candidate);
-        entry.options = null;
+        entry.optionsOpen = false;
         focusDraftCard(entry, '[data-action="edit"]');
       }, true)
     );
@@ -810,7 +826,7 @@ function openGenerationDialog(settingsOnly = false) {
   if (settingsOnly) byId('generate-tone').focus();
 }
 
-async function generateDrafts(entries, settings, individual = false) {
+async function generateDrafts(entries, individual = false) {
   if (!entries.length || state.generating) return;
   state.generating = true;
   status('generate-status', 'AI로 답글을 작성하고 있습니다…');
@@ -823,6 +839,7 @@ async function generateDrafts(entries, settings, individual = false) {
     entry.error = '';
     renderGeneration();
     try {
+      const settings = entry.overrideSettings ?? state.generationSettings;
       const { threadId, channelTitle, text, ...target } = replyPayload(entry.thread, entry.text);
       const previous = entry.text ? { previousText: entry.text } : {};
       const commentMode = entry.thread.topLevel ? 'topLevel' : undefined;
@@ -1067,13 +1084,14 @@ byId('generate-now').addEventListener('click', () => {
   }
   generateDialog.close();
   if (generateDialog.dataset.mode === 'settings') {
+    renderGeneration();
     status('generate-status', '공통 설정을 저장했습니다.', 'success');
     return;
   }
   state.generationPrompt = byId('generate-prompt').value.trim();
   const entries = selectedGenerations();
   const unwritten = entries.filter((entry) => !entry.text);
-  void generateDrafts(unwritten.length ? unwritten : entries, state.generationSettings);
+  void generateDrafts(unwritten.length ? unwritten : entries);
 });
 byId('refresh-history').addEventListener('click', () => void loadHistory());
 byId('choose-publish-target').addEventListener('click', () => {

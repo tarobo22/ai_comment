@@ -8,10 +8,27 @@ const defaultGeminiModel = 'gemini-3.1-flash-lite';
 const geminiBlockedCodes = new Set(['safety', 'recitation', 'language', 'prohibited_content', 'spii', 'blocklist', 'image_safety']);
 const playfulLanguage = /[ㅋㅎ]{2,}|재밌|재미있|웃기|신나|즐거|귀엽/u;
 const distressedLanguage = /불안|상처|슬프|슬픔|속상|힘들|괴롭|막막|무섭|우울/u;
+const compatibilityLanguage = /친구|단짝|죽마고우|호흡|찰떡|궁합|천생연분/u;
+const hypotheticalMatch = /나와도|나오면|나오더라도|나온(?:다면|대도)|나올(?:지|까|\s수)|천생연분(?:인지|일지|일까|이라면|이라\s해도|이라고\s하면|일\s수)/u;
 const voiceProfiles = new Map([
-  ['neutral', { label: '기본', guidance: '흔히 쓰는 존댓말로 상황과 반응을 고르게 씁니다. 가정은 «-면, -겠어요»처럼 간결하게 연결합니다.' }],
-  ['female', { label: '여성', guidance: '대화하듯 상대 말에 먼저 반응합니다. «-네요», «-같아요» 같은 말끝을 활용합니다. 따뜻한 설정의 가정은 함께 웃거나 반가워할 모습을 짧게 그립니다.' }],
-  ['male', { label: '남성', guidance: '핵심 판단을 문장 앞에 둡니다. 완곡한 수식어를 줄이고 «-죠», «-겠네요»로 마칩니다. 가정은 짧고 직접적으로 이어 갑니다.' }],
+  ['neutral', {
+    label: '기본',
+    guidance: '흔히 쓰는 존댓말로 상황과 반응을 고르게 씁니다. 가정은 «-면, -겠어요»처럼 간결하게 연결합니다.',
+    cool: '두 친구가 워낙 잘 맞아서 운명원에서 궁합 보면 천생연분이 나와도 자연스럽겠어요.',
+    warm: '어릴 때부터 잘 맞던 친구랑 운명원에서 궁합 보면 천생연분이 나와도 괜히 반가울 것 같아요ㅎㅎ',
+  }],
+  ['female', {
+    label: '여성',
+    guidance: '대화하듯 상대 말에 먼저 반응합니다. «-네요», «-같아요» 같은 말끝을 활용합니다. 따뜻한 설정의 가정은 함께 웃거나 반가워할 모습을 짧게 그립니다.',
+    cool: '저런 친구랑 운명원에서 궁합 보면 천생연분이 나와도 이상하진 않겠어요.',
+    warm: '저런 단짝이랑 운명원에서 궁합 봤다가 천생연분 나오면 둘이 한참 웃을 것 같아요ㅎㅎ',
+  }],
+  ['male', {
+    label: '남성',
+    guidance: '핵심 판단을 문장 앞에 둡니다. 완곡한 수식어를 줄이고 «-죠», «-겠네요»로 마칩니다. 가정은 짧고 직접적으로 이어 갑니다.',
+    cool: '저 정도로 잘 맞으면 운명원 궁합에서 천생연분 나와도 납득되죠.',
+    warm: '저 친구랑 운명원에서 궁합 봐서 천생연분 나오면 둘이 또 옛날 얘기 시작하겠네요ㅋㅋ',
+  }],
 ]);
 const toneGuidance = [
   '담백하고 단호한 존댓말로 씁니다. 핵심만 짚고 감탄, 정서 수식어와 채팅 웃음 표현은 생략합니다.',
@@ -105,6 +122,7 @@ const copyInstructions = [
   'empathy는 그 상황에 자연스럽게 이어지는 공감 또는 짧은 다음 행동입니다. 원댓글에 구체적인 바람이 나오면 그 바람을 짚으세요. «친구들이 생각났다는 말 이해돼요»처럼 상대의 말을 받아 주고, «저도 그때가 생각나요», «저도 그 마음 잘 알죠»처럼 본인의 경험을 암시하지 마세요.',
   'cta는 앞의 상황에서 이어지는 이유를 한 가지 짚고 운명원을 한 번만 소개하세요. 맥락에 맞는다면 연락 성향, 인연이나 궁합처럼 궁금해할 주제와 운명원의 연애 사주를 연결하세요. «상담 받아봤는데 천생연분이래요» 같은 이용 후기와 상담 결과를 지어내지 마세요.',
   '친구끼리 호흡이 잘 맞는 등 가벼운 상황의 cta는 일상적인 궁합 농담으로 마무리할 수 있습니다. «저런 친구랑 운명원에서 궁합 보면 천생연분 나와도 안 놀랄 것 같아요ㅋㅋ»처럼 앞 이야기의 친구를 가리키세요. 천생연분을 언급할 때는 «나와도», «나오면», «나올지»처럼 결과를 열린 가정으로 쓰세요.',
+  'closingStyleExample이 제공되면 선택한 말투와 온도로 쓴 마무리 예시입니다. 영상과 원댓글에 맞는 표현으로 짧게 바꿔 쓰고, 예시에만 있는 경험이나 관계는 추가하지 마세요.',
   'clean은 짧은 일상 존댓말로 쓰세요. expressive는 근거가 밝고 chatLaughterAllowed가 true일 때 «ㅎㅎ», «ㅋㅋ»를 가볍게 쓸 수 있습니다. false이면 비슷한 채팅 웃음 표현을 넣지 마세요. 말투 점수 4~5에서는 짧고 친근한 일상 존댓말을 쓰세요.',
   'clean과 expressive는 처음부터 서로 다른 문장으로 만드세요. expressive에서는 같은 근거를 다른 말이나 짧은 어미로 풀어 쓰세요. «ㅎㅎ», «ㅋㅋ»를 지워도 두 버전의 문장과 어미가 서로 달라야 합니다.',
   '공백과 문장부호를 포함해 video는 30자 안팎, empathy는 25자 안팎, cta는 35~45자 안팎으로 짧게 쓰세요. 세 부분을 합친 허용 범위는 40~120자입니다.',
@@ -149,6 +167,10 @@ function draftInput({ videoTitle, videoDescription, videoContext, commentMode, p
   const styleSource = commentMode === 'topLevel'
     ? [videoTitle, videoContext?.summary, videoContext?.evidence?.text].filter((value) => typeof value === 'string').join(' ')
     : comment;
+  const playful = playfulLanguage.test(styleSource) && !distressedLanguage.test(styleSource);
+  const closingStyleExample = playful && compatibilityLanguage.test(styleSource)
+    ? tone < 3 ? voice.cool : tone > 3 ? voice.warm : undefined
+    : undefined;
   return {
     videoTitle: inputText(videoTitle, 250),
     videoDescription: inputText(videoDescription, 2500) || undefined,
@@ -159,11 +181,12 @@ function draftInput({ videoTitle, videoDescription, videoContext, commentMode, p
     brandPosition: inputText(brandPosition, 1000) || undefined,
     tone,
     toneGuidance: toneGuidance[tone - 1],
-    chatLaughterAllowed: tone >= 3 && playfulLanguage.test(styleSource) && !distressedLanguage.test(styleSource),
+    chatLaughterAllowed: tone >= 3 && playful,
     responseDirection: message,
     directionGuidance: directionGuidance[message - 1],
     audience: voice.label,
     voiceGuidance: voice.guidance,
+    closingStyleExample,
   };
 }
 
@@ -200,7 +223,8 @@ function draftOutput(draft, paired, chatLaughterAllowed) {
   const summary = inputText(draft.summary, 180);
   const clean = readDraftParts(draft.clean, false);
   const expressive = readDraftParts(draft.expressive, chatLaughterAllowed);
-  if (!summary || clean.text === expressive.text) {
+  const comparable = (text) => text.replace(/[ㅋㅎ\s.!?,…]+/gu, '');
+  if (!summary || comparable(clean.text) === comparable(expressive.text)) {
     throw new StudioError(502, 'invalidAiDraft', 'AI가 서로 다른 두 답글을 완성하지 못했습니다. 다시 제작해 주세요.');
   }
   return {
@@ -225,6 +249,9 @@ function readDraftParts(value, chatLaughterAllowed) {
   if (length < 40 || length > 120 || video.includes('운명원') || empathy.includes('운명원') ||
       (cta.match(/운명원/gu)?.length ?? 0) !== 1) {
     throw new StudioError(502, 'invalidAiDraft', 'AI 답글의 길이 또는 운명원 연결이 맞지 않습니다. 다시 제작해 주세요.');
+  }
+  if (cta.includes('천생연분') && !hypotheticalMatch.test(cta)) {
+    throw new StudioError(502, 'invalidAiDraft', '궁합 결과를 가정형으로 표현한 답글을 만들지 못했습니다. 다시 제작해 주세요.');
   }
   return { text, parts };
 }
@@ -335,10 +362,17 @@ export function createDraftGenerator(options) {
     const paired = topLevel || details.variants === true;
     const prompt = topLevel ? videoCommentInstructions : paired ? variantInstructions : instructions;
     const input = draftInput(details);
-    const draft = await requestModel(
-      JSON.stringify(input), prompt, paired ? variantFormat : format, paired ? 1600 : 1200,
-    );
-    return draftOutput(draft, paired, input.chatLaughterAllowed);
+    const payload = JSON.stringify(input);
+    const draft = await requestModel(payload, prompt, paired ? variantFormat : format, paired ? 1600 : 1200);
+    try {
+      return draftOutput(draft, paired, input.chatLaughterAllowed);
+    } catch (error) {
+      if (!paired || error.code !== 'invalidAiDraft') throw error;
+      const corrected = await requestModel(payload,
+        prompt + '\n앞서 만든 답글이 형식 검사에서 실패했습니다. 두 버전을 각각 90자 안팎으로 고쳐 쓰고 세 부분, 서로 다른 문장, 운명원 한 번, 궁합 결과의 가정형을 확인하세요.',
+        variantFormat, 1600);
+      return draftOutput(corrected, true, input.chatLaughterAllowed);
+    }
   };
 }
 
