@@ -161,7 +161,7 @@ async function sendToYouTube(tabId, action, payload) {
       continue;
     }
     try {
-      const milliseconds = publish ? 30000 : action === 'checkReply' ? 4500 : action === 'openVideo' ? 26000 : 19000;
+      const milliseconds = publish ? 45000 : action === 'checkReply' ? 4500 : action === 'openVideo' ? 26000 : 19000;
       const response = await withTimeout(
         chrome.tabs.sendMessage(tabId, { type: 'studio-youtube', action, payload }, { frameId: 0 }),
         milliseconds
@@ -222,13 +222,23 @@ async function publishThroughWatchTab(sender, request, payload) {
     return result;
   } finally {
     publishing.delete(payload.recordId);
+    if (job.watchTabId !== null) {
+      const watchTab = await getTab(job.watchTabId);
+      if (watchTab?.active) {
+        const appTab = await getTab(job.appTabId);
+        if (appTab?.windowId === watchTab.windowId && watchTabMatches(watchTab, payload.videoId) &&
+            allowedSender({ ...sender, tab: appTab, url: appTab.pendingUrl || appTab.url })) {
+          await chrome.tabs.update(appTab.id, { active: true }).catch(() => {});
+        }
+      }
+    }
   }
 }
 
 async function handle(request, sender) {
   if (!allowedSender(sender)) throw problem('invalidOrigin', '댓글 스튜디오 페이지에서 다시 시도해 주세요.');
   if (!actions.has(request.action)) throw problem('invalidAction', '지원하지 않는 Chrome 연결 요청입니다.');
-  if (request.action === 'ping') return { ok: true, result: { connected: true } };
+  if (request.action === 'ping') return { ok: true, result: { connected: true, publishProtocol: 2 } };
 
   const payload = validatePayload(request.action, request.payload);
   if (publishActions.has(request.action)) {

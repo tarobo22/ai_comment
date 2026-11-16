@@ -156,7 +156,7 @@
 
     <section class="stage" id="screen-history" aria-labelledby="history-title" hidden>
       <div class="stage-heading">
-        <div><h2 id="history-title">실행하기</h2><p id="history-intro" class="hint">확정한 답글 한 건을 게시하고 결과를 기록합니다.</p></div>
+        <div><h2 id="history-title">실행하기</h2><p id="history-intro" class="hint">확정한 댓글 한 건을 게시하고 결과를 기록합니다.</p></div>
         <button class="button" id="refresh-history" type="button">새로고침</button>
       </div>
       <div class="publish-target">
@@ -168,12 +168,16 @@
         </div>
         <div class="actions">
           <button class="button" id="choose-publish-target" type="button">선택하기</button>
-          <button class="button primary" id="profile-publish" type="button" disabled>Chrome 프로필로 게시</button>
-          <button class="button" id="start-publish" type="button" disabled>직접 게시 후 확인</button>
+          <button class="button primary" id="profile-publish" type="button" disabled>바로 게시</button>
         </div>
       </div>
       <div id="history-records">
+        <div id="profile-progress" class="publish-progress" hidden>
+          <strong role="status">실행 중</strong>
+          <progress aria-label="댓글 게시 진행 중"></progress>
+        </div>
         <p id="profile-status" class="status" role="status" hidden></p>
+        <a id="profile-posted-link" class="publish-result-link" target="_blank" rel="noopener noreferrer" hidden>YouTube에서 댓글 보기 ↗</a>
         <p id="history-status" class="status" role="status" hidden></p>
         <ul id="history-list" class="history-list" aria-label="답글 이력"></ul>
       </div>
@@ -247,35 +251,20 @@
     </div>
   </dialog>
 
-  <dialog id="profile-dialog" aria-labelledby="profile-dialog-title">
-    <div class="dialog-heading"><h2 id="profile-dialog-title">Chrome 프로필 게시 확인</h2></div>
-    <p id="profile-target"></p>
-    <div class="quoted"><p id="profile-text" class="reply-body"></p></div>
-    <p class="hint">현재 연결된 Chrome 프로필로 선택한 영상에 이 문구를 입력하고 한 번 게시합니다.</p>
-    <div class="actions dialog-actions">
-      <button id="profile-cancel" class="button" type="button">취소</button>
-      <button id="profile-confirm" class="button primary" type="button">입력하고 게시</button>
-    </div>
-  </dialog>
-
   <dialog id="review-dialog" aria-labelledby="review-title">
-    <div class="dialog-heading"><h2 id="review-title">YouTube에서 직접 게시 후 확인</h2></div>
+    <div class="dialog-heading"><h2 id="review-title">이전 수동 게시 예약</h2></div>
     <p id="review-video" class="dialog-video"></p>
     <div class="quoted"><strong id="review-parent-author"></strong><p id="review-parent-text"></p></div>
     <div class="review-text"><span class="hint">게시할 답글</span><p id="review-text"></p></div>
-    <div id="manual-handoff" hidden>
-      <p class="hint">답글을 복사해 YouTube에서 게시한 뒤, 여기서 <strong>게시 확인</strong>을 누르세요.</p>
-      <div class="actions">
-        <button id="copy-reply" class="button" type="button">답글 복사</button>
-        <a id="open-original" class="button" target="_blank" rel="noopener noreferrer">YouTube에서 원댓글 열기 ↗</a>
-      </div>
+    <div id="manual-handoff">
+      <p class="hint">이미 답글을 올렸다면 <strong>게시 확인</strong>을 누르세요. 올리지 않았다면 예약을 취소할 수 있습니다.</p>
+      <a id="open-original" class="button" target="_blank" rel="noopener noreferrer">YouTube에서 원댓글 열기 ↗</a>
     </div>
     <p id="publish-status" class="status" role="status" hidden></p>
     <div class="actions dialog-actions">
-      <button id="cancel-publish" class="button" type="button">취소</button>
-      <button id="abandon-manual" class="button" type="button" hidden>미게시 확인 후 예약 취소</button>
-      <button id="retry-publish" class="button primary" type="button" hidden>다시 시도</button>
-      <button id="verify-publish" class="button primary" type="button" hidden>게시 확인</button>
+      <button id="cancel-publish" class="button" type="button">닫기</button>
+      <button id="abandon-manual" class="button" type="button">미게시 확인 후 예약 취소</button>
+      <button id="verify-publish" class="button primary" type="button">게시 확인</button>
     </div>
   </dialog>
 </body>

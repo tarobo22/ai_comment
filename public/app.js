@@ -13,8 +13,9 @@ const dateTime = new Intl.DateTimeFormat('ko-KR', { dateStyle: 'medium', timeSty
 const imageHosts = new Set(['i.ytimg.com', 'i9.ytimg.com', 'img.youtube.com', 'yt3.ggpht.com', 'yt3.googleusercontent.com', 'lh3.googleusercontent.com']);
 const youtubeHosts = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com']);
 const videoIdPattern = /^[A-Za-z0-9_-]{11}$/;
+const errorsBeforeChromeSubmission = new Set(['profileOpenFailed', 'videoTabUnavailable', 'profileBusy']);
 const statusLabels = {
-  draft: '작성 기록', posting: '게시 중', posted: '게시 완료', failed: '실패', uncertain: '확인 보류'
+  draft: '작성 기록', posting: '실행 중', posted: '게시 완료', failed: '실패', uncertain: '결과 미확인'
 };
 const toneTypeLabels = { neutral: '중립', female: '여성 말투', male: '남성 말투' };
 const draftVariantLabels = { clean: '깔끔한 버전', expressive: '의성어·의태어 버전' };
@@ -23,7 +24,7 @@ const state = {
   video: null, screen: 'video', threads: new Map(), cursor: null, loaded: false,
   loadingLatest: false, analyzingVideo: false, videoAnalysis: null,
   catalog: 0, loadingVideo: false, loadingThreads: false, saving: false,
-  posting: false, selected: null, confirmation: null, history: [], limits: null,
+  posting: false, selected: null, confirmation: null, history: [], limits: null, postedToday: null,
   drafts: new Map(), unknown: new Set(), generations: new Map(), ready: null,
   generating: false, generationSelectionChanged: false, generationPrompt: '',
   generationMode: 'reply',
@@ -174,6 +175,7 @@ function resetVideo() {
   state.generationMode = 'reply';
   status('generate-status');
   status('video-analysis-status');
+  clearProfileResult();
   byId('video-analysis').hidden = true;
   byId('video-card').hidden = true;
   byId('video-media').replaceChildren();
@@ -956,9 +958,9 @@ function publishIssue(value) {
   if (state.unknown.has(state.video?.id)) return '게시 요청의 결과를 확인할 수 없습니다. 게시 및 기록을 확인하세요.';
   const existing = state.history.find((record) => record.videoId === state.video?.id && ['posting', 'posted', 'uncertain'].includes(record.status));
   if (existing) {
-    if (existing.status === 'posted') return '이 영상에 게시한 기록이 있습니다. 영상당 답글은 1개까지입니다.';
-    if (existing.source === 'public') return '직접 게시 확인이 진행 중입니다. 아래 기록의 게시 확인을 완료하거나, 올리지 않았다면 예약을 취소하세요.';
-    return '이 영상에 게시 진행 또는 확인 보류 기록이 있습니다.';
+    if (existing.status === 'posted') return '이 영상에 게시한 기록이 있습니다. 영상당 댓글은 1개까지입니다.';
+    if (existing.source === 'public') return '이전에 만든 수동 게시 예약이 있습니다. 아래 기록의 예약 정리에서 처리하세요.';
+    return '이 영상의 이전 게시 결과를 확인할 수 없습니다. YouTube에서 댓글이 올라갔는지 확인하세요.';
   }
   if (state.limits && state.limits.used >= state.limits.max) return '오늘 게시 한도에 도달했습니다.';
   return draftIssue(value);
@@ -998,23 +1000,21 @@ function renderReplyControls() {
   byId('save-reply').disabled = !state.selected || !length || state.saving || state.posting;
   byId('review-reply').disabled = !state.selected || locked;
   const publishDisabled = privateDraft || !state.ready || Boolean(issue) || locked || state.loadingThreads;
-  byId('start-publish').disabled = publishDisabled || Boolean(state.ready?.thread.topLevel);
   byId('profile-publish').disabled = publishDisabled;
-  byId('start-publish').hidden = privateDraft;
   byId('profile-publish').hidden = privateDraft;
   byId('refresh-history').hidden = privateDraft;
   byId('history-records').hidden = privateDraft;
   byId('history-title').textContent = privateDraft ? '초안 미리보기' : '실행하기';
-  byId('history-intro').textContent = privateDraft ? '확정한 댓글 문구를 확인합니다.' : '확정한 답글 한 건을 게시하고 결과를 기록합니다.';
+  byId('history-intro').textContent = privateDraft ? '확정한 댓글 문구를 확인합니다.' : '확정한 댓글 한 건을 게시하고 결과를 기록합니다.';
   byId('publish-target-caption').textContent = privateDraft ? '댓글 초안' : '게시 대상';
   byId('choose-publish-target').disabled = locked;
   byId('choose-publish-target').textContent = privateDraft ? '초안으로 돌아가기' : '선택하기';
   byId('publish-target-label').textContent = state.ready
-    ? state.video.title + ' · ' + state.ready.thread.author
+    ? state.video.title + ' · ' + (state.ready.thread.topLevel ? '새 댓글' : state.ready.thread.author + '님에게 답글')
     : privateDraft ? '03번에서 댓글 초안을 확정하세요.' : '03번에서 게시할 답글을 확정하세요.';
   byId('publish-target-text').textContent = state.ready?.text ?? '';
   byId('publish-target-text').hidden = !state.ready;
-  status('publish-target-hint', issue);
+  status('publish-target-hint', state.posting ? '' : issue);
   byId('close-reply').disabled = state.saving || state.posting;
   byId('reload-comments').disabled = state.loadingThreads || state.posting;
   byId('more-threads').disabled = state.loadingThreads || state.posting;
@@ -1047,7 +1047,8 @@ function historyItem(record, opened) {
   details.dataset.recordId = record.id;
   details.open = opened;
   const summary = node('summary');
-  const label = record.source === 'public' && record.status === 'posting' ? '게시 확인 대기' : statusLabels[record.status];
+  const manualPending = record.source === 'public' && ['posting', 'uncertain'].includes(record.status);
+  const label = manualPending ? '이전 수동 예약' : statusLabels[record.status];
   const badge = node('span', 'badge', label || '기록');
   badge.dataset.status = record.status;
   const when = node('time', '', formatted(record.updatedAt || record.createdAt, dateTime));
@@ -1065,20 +1066,20 @@ function historyItem(record, opened) {
   if (record.message) body.append(node('p', 'hint', record.message));
   const link = allowedLink(record.replyUrl, new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be']));
   if (link) {
-    const anchor = node('a', '', 'YouTube에서 게시한 답글 보기 ↗');
+    const anchor = node('a', '', 'YouTube에서 게시한 댓글 보기 ↗');
     anchor.href = link;
     anchor.target = '_blank';
     anchor.rel = 'noopener noreferrer';
     body.append(anchor);
   }
-  if (record.source === 'public' && ['posting', 'uncertain'].includes(record.status)) {
+  if (manualPending) {
     const actions = node('div', 'actions');
-    const check = node('button', 'button', '게시 확인 열기');
+    const check = node('button', 'button', '예약 정리');
     check.type = 'button';
     check.addEventListener('click', () => {
       if (state.posting || state.saving) return;
       const item = state.video?.id === record.videoId ? state.threads.get(record.threadId) : null;
-      openReview({ payload: record, item, record, handedOff: true });
+      openReview(record, item);
     });
     actions.append(check);
     body.append(actions);
@@ -1092,7 +1093,7 @@ function renderHistory() {
   const list = byId('history-list');
   const open = new Set([...list.querySelectorAll('details[open]')].map((details) => details.dataset.recordId));
   list.replaceChildren(...state.history.map((record) => historyItem(record, open.has(String(record.id)))));
-  byId('quota-label').textContent = state.limits ? state.limits.used + ' / ' + state.limits.max + '건' : '—';
+  byId('quota-label').textContent = state.limits ? state.postedToday + ' / ' + state.limits.max + '건' : '—';
   renderReplyControls();
 }
 
@@ -1105,6 +1106,9 @@ async function loadHistory() {
     if (request !== historyRequest) return;
     state.history = result.records;
     state.limits = result.limits;
+    const today = date.format(new Date());
+    state.postedToday = Number.isInteger(result.postedToday) ? result.postedToday :
+      state.history.filter((record) => record.status === 'posted' && formatted(record.updatedAt, date) === today).length;
     renderHistory();
     status('history-status', state.history.length ? '' : '아직 작성하거나 게시한 기록이 없습니다.');
   } catch (error) {
@@ -1129,7 +1133,7 @@ byId('generate-open').addEventListener('click', () => openGenerationDialog(true)
 byId('generate-to-history').addEventListener('click', () => {
   if (!state.ready) return;
   showScreen('history');
-  (byId('start-publish').disabled ? byId('choose-publish-target') : byId('start-publish')).focus();
+  (byId('profile-publish').disabled ? byId('choose-publish-target') : byId('profile-publish')).focus();
 });
 byId('generate-cancel').addEventListener('click', () => generateDialog.close());
 byId('generate-settings-toggle').addEventListener('click', (event) => {
@@ -1248,31 +1252,23 @@ byId('review-reply').addEventListener('click', () => {
   showScreen('generate');
 });
 
-function openReview(confirmation) {
-  const { payload, record } = confirmation;
-  state.confirmation = confirmation;
-  byId('review-video').textContent = payload.videoTitle;
-  byId('review-parent-author').textContent = payload.parentAuthor;
-  byId('review-parent-text').textContent = payload.parentText;
-  byId('review-text').textContent = payload.text;
-  byId('open-original').href = watchLink(payload.videoId, payload.parentId);
-  byId('manual-handoff').hidden = !record;
-  byId('verify-publish').hidden = !record;
-  byId('abandon-manual').hidden = !record;
-  byId('retry-publish').hidden = true;
-  byId('cancel-publish').textContent = confirmation.handedOff ? '닫기' : '취소';
+function openReview(record, item) {
+  state.confirmation = { record, item };
+  byId('review-video').textContent = record.videoTitle;
+  byId('review-parent-author').textContent = record.parentAuthor;
+  byId('review-parent-text').textContent = record.parentText;
+  byId('review-text').textContent = record.text;
+  byId('open-original').href = watchLink(record.videoId, record.parentId);
   status('global-status');
-  status('publish-status', record?.message, record?.status === 'uncertain' ? 'warn' : '');
+  status('publish-status', record.message, record.status === 'uncertain' ? 'warn' : '');
   dialog.showModal();
 }
 
 function setPublishing(busy) {
   state.posting = busy;
   byId('cancel-publish').disabled = busy;
-  byId('retry-publish').disabled = busy;
   byId('verify-publish').disabled = busy;
   byId('abandon-manual').disabled = busy;
-  byId('copy-reply').disabled = busy;
   renderReplyControls();
 }
 
@@ -1281,86 +1277,7 @@ function endPublishing() {
   void loadHistory();
 }
 
-async function prepareManualReply() {
-  const confirmation = state.confirmation;
-  if (!confirmation || confirmation.record || state.posting) return;
-  const { payload } = confirmation;
-  setPublishing(true);
-  byId('retry-publish').hidden = true;
-  status('publish-status', '원댓글과 기존 답글을 확인하는 중입니다…');
-  try {
-    const { record } = await api('/api/public/replies/start', payload).catch((error) => {
-      if (error.code === 'requestInProgress' && error.record?.source === 'public') return { record: error.record };
-      throw error;
-    });
-    state.unknown.delete(payload.videoId);
-    updateRecord(record);
-    if (!['posting', 'uncertain'].includes(record.status)) throw new Error('게시 요청의 상태는 게시 및 기록에서 확인해 주세요.');
-    confirmation.record = record;
-    if (record.status === 'uncertain') markHandoff();
-    byId('manual-handoff').hidden = false;
-    byId('verify-publish').hidden = false;
-    byId('abandon-manual').hidden = false;
-    status('publish-status', record.message, record.status === 'uncertain' ? 'warn' : '');
-  } catch (error) {
-    updateRecord(error.record);
-    if (error.transportError) state.unknown.add(payload.videoId);
-    byId('retry-publish').hidden = false;
-    status('publish-status', error.message, error.transportError ? 'warn' : 'error');
-  } finally {
-    endPublishing();
-    if (confirmation.record && dialog.open) byId('copy-reply').focus();
-  }
-}
-
-function markHandoff() {
-  if (!state.confirmation?.record) return;
-  state.confirmation.handedOff = true;
-  byId('cancel-publish').textContent = '닫기';
-}
-
-async function closeReview() {
-  if (state.posting || !state.confirmation) return;
-  const { record, handedOff } = state.confirmation;
-  if (!record || handedOff) {
-    dialog.close();
-    return;
-  }
-  setPublishing(true);
-  byId('manual-handoff').hidden = true;
-  try {
-    const result = await api('/api/chrome/replies/finish', {
-      recordId: record.id,
-      status: 'failed',
-      message: 'YouTube에서 원댓글을 열기 전에 취소했습니다.'
-    });
-    updateRecord(result.record);
-    dialog.close();
-  } catch (error) {
-    updateRecord(error.record);
-    byId('manual-handoff').hidden = false;
-    status('publish-status', error.message, 'error');
-  } finally {
-    endPublishing();
-  }
-}
-
-byId('start-publish').addEventListener('click', () => {
-  if (byId('start-publish').disabled || !state.ready) return;
-  const { thread, text } = state.ready;
-  const payload = { ...replyPayload(thread, text), requestId: crypto.randomUUID() };
-  openReview({ payload, item: state.threads.get(thread.id) });
-  void prepareManualReply();
-});
-
-const profileDialog = byId('profile-dialog');
-const profileProgress = {
-  opening: 'Chrome 프로필에서 영상 여는 중…',
-  typing: '한 글자씩 입력하는 중…',
-  verifying: 'YouTube에서 게시된 댓글을 확인하는 중…',
-};
-
-function chromeBridge(action, payload, showProgress) {
+function chromeBridge(action, payload) {
   return new Promise((resolve, reject) => {
     const id = crypto.randomUUID();
     const timeout = setTimeout(() => {
@@ -1373,14 +1290,13 @@ function chromeBridge(action, payload, showProgress) {
       const message = event.data;
       if (event.source !== window || event.origin !== location.origin ||
           message?.source !== 'unmyeongwon-chrome' || message.id !== id) return;
-      if (typeof message.ok !== 'boolean') {
-        if (Object.hasOwn(profileProgress, message.progress)) showProgress?.(profileProgress[message.progress]);
-        return;
-      }
+      if (typeof message.ok !== 'boolean') return;
       clearTimeout(timeout);
       window.removeEventListener('message', received);
       if (message.ok) resolve(message.result);
-      else reject(new Error(message.error?.message || 'Chrome 게시 상태를 확인하지 못했습니다.'));
+      else reject(Object.assign(new Error(message.error?.message || 'Chrome 게시 상태를 확인하지 못했습니다.'), {
+        code: message.error?.code
+      }));
     }
     window.addEventListener('message', received);
     window.postMessage({ source: 'unmyeongwon-studio', id, action, payload }, location.origin);
@@ -1388,49 +1304,57 @@ function chromeBridge(action, payload, showProgress) {
 }
 
 byId('profile-publish').addEventListener('click', () => {
-  if (byId('profile-publish').disabled || !state.ready) return;
-  const { thread, text } = state.ready;
-  byId('profile-target').textContent = state.video.title + ' · ' + (thread.topLevel ? '새 댓글' : thread.author + '님에게 답글');
-  byId('profile-text').textContent = text;
-  profileDialog.showModal();
-  byId('profile-cancel').focus();
+  if (!byId('profile-publish').disabled && state.ready && !state.posting) void publishInProfile();
 });
-byId('profile-cancel').addEventListener('click', () => profileDialog.close());
-byId('profile-confirm').addEventListener('click', () => {
-  if (state.ready && !state.posting) void publishInProfile();
-});
+
+function clearProfileResult() {
+  status('profile-status');
+  const link = byId('profile-posted-link');
+  link.hidden = true;
+  link.removeAttribute('href');
+}
 
 async function publishInProfile() {
   if (state.video?.privateDraft) return;
   const { thread, text } = state.ready;
   const topLevel = thread.topLevel === true;
   const payload = { ...replyPayload(thread, text), topLevel, requestId: crypto.randomUUID() };
-  profileDialog.close();
   setPublishing(true);
-  status('profile-status', 'Chrome 프로필 연결을 확인하는 중…');
+  clearProfileResult();
+  byId('profile-progress').hidden = false;
   let record;
   try {
     const connection = await chromeBridge('ping');
     if (!connection?.connected) throw new Error('Chrome 프로필 연결을 확인하지 못했습니다.');
+    if (connection.publishProtocol !== 2) throw new Error('Chrome 확장을 새로고침한 뒤 스튜디오 탭도 새로고침하세요.');
     ({ record } = await api('/api/chrome/replies/start', payload));
     updateRecord(record);
     const result = await chromeBridge(topLevel ? 'postComment' : 'postReply', {
       recordId: record.id, videoId: payload.videoId, parentId: topLevel ? undefined : payload.parentId, text,
-    }, (message) => status('profile-status', message));
+    });
     const finished = await api('/api/chrome/replies/finish', { ...result, recordId: record.id });
     record = null;
     updateRecord(finished.record);
     if (finished.record.status === 'posted') {
       state.ready = null;
-      status('profile-status', '게시된 댓글을 확인해 기록했습니다.', 'success');
+      const url = allowedLink(finished.record.replyUrl, youtubeHosts);
+      if (url) {
+        const link = byId('profile-posted-link');
+        link.href = url;
+        link.hidden = false;
+      }
+      status('profile-status', url ? '게시 완료' : '게시 완료 · 댓글 링크를 가져오지 못했습니다.', 'success');
     } else {
-      status('profile-status', finished.record.message || '게시 결과를 확인해 주세요.', 'warn');
+      const message = finished.record.message || 'YouTube에서 게시 여부를 확인하지 못했습니다.';
+      const failed = finished.record.status === 'failed';
+      status('profile-status', (failed ? '게시 실패 · ' : '결과 미확인 · ') + message, failed ? 'error' : 'warn');
     }
   } catch (error) {
     updateRecord(error.record);
     if (record) {
       try {
-        const result = await api('/api/chrome/replies/finish', { recordId: record.id, status: 'uncertain', message: error.message });
+        const outcome = errorsBeforeChromeSubmission.has(error.code) ? 'failed' : 'uncertain';
+        const result = await api('/api/chrome/replies/finish', { recordId: record.id, status: outcome, message: error.message });
         updateRecord(result.record);
       } catch {
         state.unknown.add(payload.videoId);
@@ -1438,41 +1362,18 @@ async function publishInProfile() {
     } else if (error.transportError) {
       state.unknown.add(payload.videoId);
     }
-    status('profile-status', error.message, 'error');
+    status('profile-status', '게시 요청 오류 · ' + error.message, 'error');
   } finally {
+    byId('profile-progress').hidden = true;
     endPublishing();
   }
 }
 
-byId('retry-publish').addEventListener('click', () => void prepareManualReply());
-byId('cancel-publish').addEventListener('click', () => void closeReview());
+byId('cancel-publish').addEventListener('click', () => { if (!state.posting) dialog.close(); });
 dialog.addEventListener('cancel', (event) => {
-  event.preventDefault();
-  void closeReview();
+  if (state.posting) event.preventDefault();
 });
 dialog.addEventListener('close', () => { if (!dialog.open) state.confirmation = null; });
-
-for (const event of ['click', 'auxclick', 'contextmenu', 'dragstart']) {
-  byId('open-original').addEventListener(event, markHandoff);
-}
-
-byId('copy-reply').addEventListener('click', async () => {
-  const confirmation = state.confirmation;
-  if (!confirmation?.record || state.posting) return;
-  markHandoff();
-  try {
-    await navigator.clipboard.writeText(confirmation.payload.text);
-    if (state.confirmation === confirmation && !state.posting) status('publish-status', '답글을 복사했습니다.');
-  } catch {
-    if (state.confirmation !== confirmation || state.posting) return;
-    const range = document.createRange();
-    range.selectNodeContents(byId('review-text'));
-    const selection = window.getSelection();
-    selection.removeAllRanges();
-    selection.addRange(range);
-    status('publish-status', '선택된 답글을 복사해 주세요.');
-  }
-});
 
 function showVerifiedManualReply(confirmation, result) {
   const { item } = confirmation;
@@ -1505,7 +1406,7 @@ byId('abandon-manual').addEventListener('click', async () => {
       showVerifiedManualReply(confirmation, result);
     } else if (result.record.status === 'failed') {
       dialog.close();
-      status('global-status', '예약을 취소했습니다. Chrome 프로필로 게시할 수 있습니다.', 'success');
+      status('global-status', '수동 게시 예약을 취소했습니다.', 'success');
     } else {
       status('publish-status', result.message || result.record.message, 'warn');
     }
@@ -1521,7 +1422,6 @@ byId('verify-publish').addEventListener('click', async () => {
   const confirmation = state.confirmation;
   if (!confirmation?.record || state.posting) return;
   const { record } = confirmation;
-  markHandoff();
   setPublishing(true);
   status('publish-status', 'YouTube에서 새 답글을 확인하는 중입니다…');
   try {

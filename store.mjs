@@ -75,7 +75,8 @@ export function createStore(dataDir) {
   const removePublicCheck = db.prepare('DELETE FROM public_reply_checks WHERE recordId = ?');
   const draftAt = db.prepare(`SELECT * FROM records WHERE videoId = ? AND parentId = ? AND status = 'draft'`);
   const occupiedAt = db.prepare(`SELECT * FROM records WHERE videoId = ? AND status IN ('posting','posted','uncertain')`);
-  const usage = db.prepare(`SELECT count(*) AS used FROM records WHERE quotaDate = ? AND status IN ('posting','posted','uncertain')`);
+  const usage = db.prepare(`SELECT count(*) AS used, count(CASE WHEN status = 'posted' THEN 1 END) AS posted
+    FROM records WHERE quotaDate = ? AND status IN ('posting','posted','uncertain')`);
   const allRecords = db.prepare('SELECT * FROM records ORDER BY updatedAt DESC, rowid DESC');
   const insert = db.prepare(`INSERT INTO records
     (id, videoId, videoTitle, channelTitle, threadId, parentId, parentAuthor, parentText, text, status,
@@ -181,9 +182,11 @@ export function createStore(dataDir) {
     },
     history() {
       scrubExpired();
+      const { used, posted } = usage.get(dateInSeoul.format(new Date()));
       return {
         records: allRecords.all().map(publicRecord),
-        limits: { used: usage.get(dateInSeoul.format(new Date())).used, max: dailyMax },
+        limits: { used, max: dailyMax },
+        postedToday: posted,
       };
     },
     close() {
