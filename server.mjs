@@ -18,6 +18,9 @@ const commentPattern = /^[A-Za-z0-9._-]{1,256}$/;
 const requestPattern = /^[A-Za-z0-9_-]{8,128}$/;
 const youtubeHosts = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com']);
 const maxBodyBytes = 64 * 1024;
+const maxPrivateCaptionsBytes = 32 * 1024;
+const maxPrivateContextCues = 16;
+const srtTimeline = /^(\d{2}:[0-5]\d:[0-5]\d[,.]\d{3})[ \t]*-->[ \t]*(\d{2}:[0-5]\d:[0-5]\d[,.]\d{3})$/u;
 const fileRoutes = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
@@ -64,6 +67,35 @@ export function parseVideoUrl(value) {
     throw new StudioError(400, 'invalidVideoUrl', '일반 영상, 공유 링크, 쇼츠 또는 라이브 영상의 YouTube 링크를 입력해 주세요.');
   }
   return id;
+}
+
+function readPrivateTranscript(captions) {
+  if (typeof captions === 'string' && Buffer.byteLength(captions, 'utf8') > maxPrivateCaptionsBytes) {
+    throw new StudioError(413, 'privateCaptionsTooLarge', '자막 파일은 32KB 이하로 올려 주세요.');
+  }
+  const invalid = new StudioError(400, 'invalidPrivateCaptions', '시작·종료 시간과 자막 문장이 있는 SRT 파일을 올려 주세요.');
+  if (typeof captions !== 'string' || !captions.trim() || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/u.test(captions)) {
+    throw invalid;
+  }
+  return captions.replace(/\r\n?/gu, '\n').trim().split(/\n(?:[ \t]*\n)+/u).map((block) => {
+    const lines = block.split('\n');
+    if (/^\d+$/u.test(lines[0].trim())) lines.shift();
+    const timeline = srtTimeline.exec(lines.shift()?.trim() ?? '');
+    const text = lines.join(' ').replace(/\s+/gu, ' ').trim();
+    if (!timeline || !text || lines.some((line) => srtTimeline.test(line.trim()))) throw invalid;
+    const start = timeline[1].replace('.', ',');
+    const end = timeline[2].replace('.', ',');
+    if (start >= end) throw invalid;
+    return { timestamp: start, text };
+  });
+}
+
+function privateCaptionContext(transcript) {
+  const selected = transcript.length <= maxPrivateContextCues ? transcript : Array.from(
+    { length: maxPrivateContextCues },
+    (_, index) => transcript[Math.round(index * (transcript.length - 1) / (maxPrivateContextCues - 1))],
+  );
+  return selected.map(({ timestamp, text }) => ({ timestamp, text: [...text].slice(0, 240).join('') }));
 }
 
 function readCursor(url) {
@@ -308,6 +340,12 @@ export async function startStudio({
   let localhost;
   let connectionGeneration = 0;
 
+  function cacheVideoAnalysis(key, analysis) {
+    videoAnalyses.delete(key);
+    if (videoAnalyses.size >= 32) videoAnalyses.delete(videoAnalyses.keys().next().value);
+    videoAnalyses.set(key, analysis);
+  }
+
   async function authorize() {
     try {
       return await session().authorize();
@@ -452,21 +490,48 @@ export async function startStudio({
       }
       const result = await analyzeVideo(context);
       const analysis = { ...result, sources: context.sources, popularCommentCount: context.popularComments.length };
-      videoAnalyses.delete(videoId);
-      if (videoAnalyses.size >= 32) videoAnalyses.delete(videoAnalyses.keys().next().value);
-      videoAnalyses.set(videoId, analysis);
+      cacheVideoAnalysis(videoId, analysis);
       return output(response, 200, analysis);
+    }
+    if (method === 'POST' && url.pathname === '/api/ai/private-video-analysis') {
+      const body = await readBody(request);
+      const id = parseVideoUrl(body.url);
+      const title = typeof body.title === 'string' ? body.title.trim() : '';
+      if (!title || [...title].length > 250 || /[\x00-\x1f\x7f]/u.test(title)) {
+        throw new StudioError(400, 'invalidPrivateTitle', '영상 제목을 250자 이하로 입력해 주세요.');
+      }
+      const transcript = readPrivateTranscript(body.captions);
+      const video = {
+        id, title, description: '', channelTitle: '', thumbnailUrl: '', publishedAt: '',
+        watchUrl: `https://www.youtube.com/watch?v=${id}`, privateDraft: true,
+      };
+      const result = await analyzeVideo({ video, transcript, popularComments: [], providedCaptions: true });
+      const analysis = {
+        ...result,
+        sources: { transcript: 'available', transcriptTruncated: false, popularComments: 'unavailable', providedCaptions: true },
+        popularCommentCount: 0,
+      };
+      cacheVideoAnalysis(`private:${id}`, { ...analysis, captions: privateCaptionContext(transcript) });
+      return output(response, 200, { video, analysis });
     }
     if (method === 'POST' && url.pathname === '/api/ai/draft') {
       const details = await readBody(request);
       const videoId = checkId(details.videoId, videoPattern, '올바른 영상 ID가 필요합니다.');
       const topLevel = details.commentMode === 'topLevel';
+      const privateDraft = details.privateDraft === true;
+      if (privateDraft && !topLevel) {
+        throw new StudioError(400, 'privateDraftMode', '비공개 영상에서는 새 댓글 초안만 작성할 수 있습니다.');
+      }
       if (!topLevel) checkId(details.parentId, commentPattern, '답글을 만들 원댓글을 선택해 주세요.');
-      const analysis = (topLevel || details.videoAnalysis) ? videoAnalyses.get(videoId) : null;
+      const analysisKey = privateDraft ? `private:${videoId}` : videoId;
+      const analysis = (topLevel || details.videoAnalysis) ? videoAnalyses.get(analysisKey) : null;
       if (topLevel && !analysis) {
         throw new StudioError(409, 'videoAnalysisRequired', '1번에서 선택한 영상의 분석을 먼저 실행해 주세요.');
       }
-      const videoContext = analysis ? { summary: analysis.summary, evidence: analysis.evidence } : null;
+      const videoContext = analysis ? {
+        summary: analysis.summary, evidence: analysis.evidence,
+        ...(privateDraft && { captions: analysis.captions }),
+      } : null;
       return output(response, 200, await generateDraft({ ...details, videoContext }));
     }
     if (method === 'POST' && url.pathname === '/api/public/replies/start') {

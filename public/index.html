@@ -39,7 +39,7 @@
 
     <section class="stage" id="screen-video" aria-labelledby="video-title">
       <div class="stage-heading"><h2 id="video-title">YouTube 영상 불러오기</h2></div>
-      <section class="latest-videos" aria-labelledby="latest-title">
+      <section id="latest-public" class="latest-videos" aria-labelledby="latest-title">
         <div class="latest-heading">
           <h3 id="latest-title">최근 연애 관련 영상</h3>
           <button class="button" id="load-latest" type="button">최신 영상 불러오기</button>
@@ -56,6 +56,23 @@
         <p id="video-hint" class="hint">링크를 붙여넣으면 공개 영상 정보가 표시됩니다.</p>
       </form>
       <p id="video-status" class="status" role="status" hidden></p>
+      <details id="private-video-options" class="private-video-options">
+        <summary>내 영상 자막으로 초안 만들기</summary>
+        <form id="private-video-form">
+          <div>
+            <label for="private-video-title">내 영상 제목</label>
+            <input id="private-video-title" type="text" maxlength="500" required>
+          </div>
+          <div>
+            <label for="private-video-captions">자막 파일 (.srt)</label>
+            <input id="private-video-captions" type="file" accept=".srt,application/x-subrip" required>
+          </div>
+          <div class="actions">
+            <button id="analyze-private-video" class="button primary" type="submit">자막 분석</button>
+          </div>
+        </form>
+        <p id="private-video-status" class="status" role="status" hidden></p>
+      </details>
       <div class="brand-position">
         <label for="brand-position">운명원 포지션 <span class="muted">(선택)</span></label>
         <textarea id="brand-position" rows="2" maxlength="1000" aria-describedby="brand-position-hint" placeholder="예: 운명원은 연애 고민과 인연의 흐름을 사주로 돌아보는 곳입니다. 가볍게 소개하고 이용 후기는 쓰지 마세요."></textarea>
@@ -68,7 +85,7 @@
           <p class="eyebrow">선택한 영상</p>
           <h3 id="selected-video-title"></h3>
           <p id="selected-video-meta" class="muted"></p>
-          <div class="actions">
+          <div id="selected-video-actions" class="actions">
             <a id="watch-video" class="button" target="_blank" rel="noopener noreferrer">YouTube에서 보기 ↗</a>
             <button id="analyze-video" class="button" type="button">자막·인기 댓글 분석</button>
             <button id="show-comments" class="button primary" type="button">댓글 대상으로 →</button>
@@ -139,12 +156,12 @@
 
     <section class="stage" id="screen-history" aria-labelledby="history-title" hidden>
       <div class="stage-heading">
-        <div><h2 id="history-title">실행하기</h2><p class="hint">확정한 답글 한 건을 게시하고 결과를 기록합니다.</p></div>
+        <div><h2 id="history-title">실행하기</h2><p id="history-intro" class="hint">확정한 답글 한 건을 게시하고 결과를 기록합니다.</p></div>
         <button class="button" id="refresh-history" type="button">새로고침</button>
       </div>
       <div class="publish-target">
         <div>
-          <p class="eyebrow">게시 대상</p>
+          <p id="publish-target-caption" class="eyebrow">게시 대상</p>
           <strong id="publish-target-label">영상과 원댓글을 선택하세요.</strong>
           <p id="publish-target-text" class="reply-body publish-target-text" hidden></p>
           <p id="publish-target-hint" class="hint" hidden></p>
@@ -155,9 +172,11 @@
           <button class="button primary" id="start-publish" type="button" disabled>게시</button>
         </div>
       </div>
-      <p id="profile-status" class="status" role="status" hidden></p>
-      <p id="history-status" class="status" role="status" hidden></p>
-      <ul id="history-list" class="history-list" aria-label="답글 이력"></ul>
+      <div id="history-records">
+        <p id="profile-status" class="status" role="status" hidden></p>
+        <p id="history-status" class="status" role="status" hidden></p>
+        <ul id="history-list" class="history-list" aria-label="답글 이력"></ul>
+      </div>
     </section>
   </main>
 

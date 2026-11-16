@@ -5,6 +5,7 @@ const generateDialog = byId('generate-dialog');
 const aiSettingsDialog = byId('ai-settings-dialog');
 const editor = byId('inline-reply');
 const replyText = byId('reply-text');
+const privateVideoOptions = byId('private-video-options');
 const brandPositionInput = byId('brand-position');
 const brandPositionKey = 'unmyeongwon-studio.brand-position';
 const date = new Intl.DateTimeFormat('ko-KR', { dateStyle: 'medium', timeZone: 'Asia/Seoul' });
@@ -136,7 +137,7 @@ byId('ai-settings-form').addEventListener('submit', async (event) => {
 
 function showScreen(screen) {
   if (state.loadingVideo || state.loadingLatest || state.analyzingVideo || state.generating) return;
-  if (screen === 'comments' && !state.video) return;
+  if (screen === 'comments' && (!state.video || state.video.privateDraft)) return;
   if (screen === 'generate' && !selectedGenerations().length) return;
   const entering = screen !== state.screen;
   state.screen = screen;
@@ -153,7 +154,7 @@ function showScreen(screen) {
   }
   if (screen === 'history') {
     renderReplyControls();
-    void loadHistory();
+    if (!state.video?.privateDraft) void loadHistory();
   }
 }
 
@@ -182,22 +183,28 @@ function resetVideo() {
 }
 
 function displayVideo(video) {
+  const privateDraft = video.privateDraft === true;
+  const card = byId('video-card');
+  card.dataset.privateDraft = String(privateDraft);
   byId('selected-video-title').textContent = video.title;
-  byId('selected-video-meta').textContent = [video.channelTitle, formatted(video.publishedAt, date)].filter(Boolean).join(' · ');
+  byId('selected-video-meta').textContent = privateDraft ? '자막으로 분석한 내 영상' :
+    [video.channelTitle, formatted(video.publishedAt, date)].filter(Boolean).join(' · ');
   byId('thread-video-title').textContent = video.title;
   const videoId = video.id;
   if (!videoIdPattern.test(videoId)) throw new Error('동영상 정보를 읽을 수 없습니다.');
   byId('watch-video').href = watchLink(videoId);
   const media = byId('video-media');
   media.replaceChildren();
-  const thumbnail = allowedLink(video.thumbnailUrl, imageHosts);
+  media.hidden = privateDraft;
+  byId('selected-video-actions').hidden = privateDraft;
+  const thumbnail = !privateDraft && allowedLink(video.thumbnailUrl, imageHosts);
   if (thumbnail) {
     const image = node('img');
     image.src = thumbnail;
     image.alt = '';
     media.append(image);
   }
-  if (video.embeddable) {
+  if (!privateDraft && video.embeddable) {
     const preview = node('button', 'button play-preview', '▶ 미리보기');
     preview.type = 'button';
     preview.addEventListener('click', () => {
@@ -211,8 +218,7 @@ function displayVideo(video) {
     });
     media.append(preview);
   }
-  byId('video-card').hidden = false;
-  nav.find((button) => button.dataset.screen === 'comments').disabled = false;
+  card.hidden = false;
 }
 
 function latestVideoRow(video) {
@@ -244,7 +250,7 @@ function videoReadBlocked() {
 }
 
 async function loadLatestVideos() {
-  if (videoReadBlocked()) return;
+  if (privateVideoOptions.open || videoReadBlocked()) return;
   state.loadingLatest = true;
   renderReplyControls();
   status('latest-status', '최근 공개 영상을 찾고 있습니다…');
@@ -263,14 +269,14 @@ async function loadLatestVideos() {
 }
 
 async function loadVideo(url) {
-  if (videoReadBlocked() || !url) return;
+  if (privateVideoOptions.open || videoReadBlocked() || !url) return;
   state.loadingVideo = true;
   renderReplyControls();
   status('video-status', 'YouTube 영상 정보를 확인하고 있습니다…');
   try {
     const result = await api('/api/public/video?' + new URLSearchParams({ url }));
     if (!videoIdPattern.test(result?.video?.id)) throw new Error('영상 정보를 읽을 수 없습니다.');
-    if (state.video?.id !== result.video.id) resetVideo();
+    if (state.video?.id !== result.video.id || state.video?.privateDraft) resetVideo();
     state.video = result.video;
     byId('video-url').value = url;
     displayVideo(state.video);
@@ -285,21 +291,22 @@ async function loadVideo(url) {
 
 function displayVideoAnalysis(result) {
   byId('analysis-summary').textContent = result.summary;
+  const providedCaptions = result.sources?.providedCaptions === true;
   const transcript = result.sources?.transcript === 'available' ? '자막 확인' : '자막 미확인 · 제목·설명 사용';
   const commentCount = result.popularCommentCount ?? 0;
   const comments = result.sources?.popularComments === 'top' ? '인기 댓글 ' + commentCount + '개' : '인기 댓글 미확인';
-  byId('analysis-sources').textContent = [transcript, comments].join(' · ');
+  byId('analysis-sources').textContent = providedCaptions ? '제공한 자막' : [transcript, comments].join(' · ');
   const evidence = result.evidence;
   byId('analysis-evidence').hidden = !evidence?.text;
   byId('analysis-evidence-label').textContent = evidence?.source === 'transcript'
-    ? ['자막 근거', evidence.timestamp].filter(Boolean).join(' · ')
+    ? [providedCaptions ? '제공한 자막 근거' : '자막 근거', evidence.timestamp].filter(Boolean).join(' · ')
     : '제목·설명 근거';
   byId('analysis-evidence-text').textContent = evidence?.text ?? '';
   byId('video-analysis').hidden = false;
 }
 
 async function analyzeVideo() {
-  if (!state.video || videoReadBlocked()) return;
+  if (!state.video || state.video.privateDraft || videoReadBlocked()) return;
   state.analyzingVideo = true;
   renderReplyControls();
   status('video-analysis-status', '자막과 인기 댓글을 확인하고 있습니다…');
@@ -315,6 +322,52 @@ async function analyzeVideo() {
     state.analyzingVideo = false;
     renderReplyControls();
   }
+}
+
+async function analyzePrivateVideo() {
+  if (!privateVideoOptions.open || videoReadBlocked()) return;
+  const urlInput = byId('video-url');
+  const url = urlInput.value.trim();
+  if (!isVideoLink(url)) {
+    status('private-video-status', '위에 내 영상의 YouTube 링크를 입력해 주세요.', 'error');
+    urlInput.focus();
+    return;
+  }
+  const title = byId('private-video-title').value.trim();
+  if (!title || Array.from(title).length > 250) {
+    status('private-video-status', '영상 제목을 1~250자로 입력해 주세요.', 'error');
+    byId('private-video-title').focus();
+    return;
+  }
+  const srt = byId('private-video-captions').files[0];
+  if (!srt || !/\.srt$/i.test(srt.name) || !srt.size || srt.size > 32 * 1024) {
+    status('private-video-status', '내용이 있고 32KB 이하인 SRT 자막 파일을 선택해 주세요.', 'error');
+    return;
+  }
+  state.analyzingVideo = true;
+  renderReplyControls();
+  status('private-video-status', '제공한 자막을 분석하고 있습니다…');
+  try {
+    const result = await api('/api/ai/private-video-analysis', { url, title, captions: await srt.text() });
+    const { video, analysis } = result;
+    if (video?.privateDraft !== true || !videoIdPattern.test(video.id) || !analysis?.sources?.providedCaptions ||
+        typeof analysis.summary !== 'string' || !analysis.summary.trim()) {
+      throw new Error('내 영상의 자막 분석 결과를 읽을 수 없습니다.');
+    }
+    resetVideo();
+    state.video = video;
+    state.videoAnalysis = analysis;
+    displayVideo(video);
+    displayVideoAnalysis(analysis);
+    status('private-video-status');
+  } catch (error) {
+    status('private-video-status', error.message, 'error');
+    return;
+  } finally {
+    state.analyzingVideo = false;
+    renderReplyControls();
+  }
+  byId('write-video-comment').focus();
 }
 
 function avatar(author, avatarUrl) {
@@ -406,7 +459,7 @@ function addThread(thread) {
 }
 
 async function loadThreads(append = false) {
-  if (state.loadingVideo || state.loadingThreads || state.posting || state.saving || !state.video || (append && !state.cursor)) return;
+  if (state.loadingVideo || state.loadingThreads || state.posting || state.saving || !state.video || state.video.privateDraft || (append && !state.cursor)) return;
   const catalog = state.catalog;
   state.loadingThreads = true;
   byId('reload-comments').disabled = true;
@@ -755,19 +808,20 @@ function generationCard(entry) {
     card.append(editor);
   }
   if (entry.candidate) {
+    const privateComment = state.video?.privateDraft && entry.thread.topLevel;
     const candidate = node('div', 'generation-card-previous');
-    candidate.append(node('strong', '', '새로 만든 답글'));
+    candidate.append(node('strong', '', privateComment ? '새로 만든 댓글' : '새로 만든 답글'));
     if (entry.candidate.approach) candidate.append(node('p', 'hint', '작성 방향 · ' + entry.candidate.approach));
     candidate.append(node('p', 'hint', '개별 설정 · ' + settingsLabel(entry.candidate.settings)));
     if (entry.candidate.variants) candidate.append(draftVariantSelector(entry, entry.candidate));
     candidate.append(draftBody(entry.candidate));
     const buttons = node('div', 'actions');
     buttons.append(
-      generationButton('기존 답글 유지', () => {
+      generationButton(privateComment ? '기존 댓글 유지' : '기존 답글 유지', () => {
         entry.candidate = null;
         focusDraftCard(entry, '[data-action="settings"]');
       }),
-      generationButton('새 답글 적용', () => {
+      generationButton(privateComment ? '새 댓글 적용' : '새 답글 적용', () => {
         applyDraft(entry, entry.candidate);
         entry.optionsOpen = false;
         focusDraftCard(entry, '[data-action="edit"]');
@@ -845,6 +899,7 @@ async function generateDrafts(entries, individual = false) {
       const commentMode = entry.thread.topLevel ? 'topLevel' : undefined;
       const result = await api('/api/ai/draft', {
         ...target, ...previous, videoDescription: state.video.description, videoAnalysis: state.videoAnalysis,
+        ...(state.video.privateDraft ? { privateDraft: true } : {}),
         commentMode, settings, prompt, brandPosition, variants: true
       });
       if (typeof result.text !== 'string' || !result.text.trim()) throw new Error('AI가 답글을 반환하지 않았습니다.');
@@ -913,18 +968,23 @@ function renderReplyControls() {
   byId('reply-count').textContent = length + ' / 120자';
   const locked = state.loadingVideo || state.loadingLatest || state.analyzingVideo ||
     state.posting || state.saving || state.generating;
+  const privateDraft = state.video?.privateDraft === true;
   const count = selectedGenerations().length;
   const replyCount = selectedGenerations('reply').length;
   for (const button of nav) {
-    button.disabled = locked || (button.dataset.screen === 'comments' && !state.video) ||
+    button.disabled = locked || (button.dataset.screen === 'comments' && (!state.video || privateDraft)) ||
       (button.dataset.screen === 'generate' && !count);
   }
-  byId('load-video').disabled = locked || state.loadingThreads;
+  const videoLocked = locked || state.loadingThreads;
+  byId('load-video').disabled = videoLocked || privateVideoOptions.open;
   byId('video-url').readOnly = locked || state.loadingThreads;
-  byId('load-latest').disabled = locked || state.loadingThreads;
-  byId('analyze-video').disabled = locked || state.loadingThreads;
+  byId('load-latest').disabled = videoLocked || privateVideoOptions.open;
+  byId('analyze-private-video').disabled = videoLocked;
+  byId('private-video-title').readOnly = videoLocked;
+  byId('private-video-captions').disabled = videoLocked;
+  byId('analyze-video').disabled = videoLocked || privateDraft;
   byId('write-video-comment').disabled = locked || state.loadingThreads || !state.videoAnalysis;
-  byId('show-comments').disabled = locked;
+  byId('show-comments').disabled = locked || privateDraft;
   for (const button of byId('latest-videos').querySelectorAll('button[data-video-id]')) {
     button.disabled = locked || state.loadingThreads;
     button.setAttribute('aria-pressed', String(button.dataset.videoId === state.video?.id));
@@ -932,16 +992,25 @@ function renderReplyControls() {
   byId('open-generation').disabled = !replyCount || locked;
   byId('generation-selection-count').textContent = '선택한 댓글 ' + replyCount + '개';
   byId('generate-to-history').disabled = !state.ready || locked;
-  const issue = state.ready ? publishIssue(state.ready.text) : '';
+  const issue = state.ready && !privateDraft ? publishIssue(state.ready.text) : '';
   byId('reply-guidance').textContent = length ? draftIssue(replyText.value.trim()) || '작성한 답글을 03번으로 가져갈 수 있습니다.' : '40~120자 · 운명원 언급 · 링크와 해시태그 없이';
   byId('save-reply').disabled = !state.selected || !length || state.saving || state.posting;
   byId('review-reply').disabled = !state.selected || locked;
-  byId('start-publish').disabled = !state.ready || Boolean(issue) || locked || state.loadingThreads || Boolean(state.ready?.thread.topLevel);
-  byId('profile-publish').disabled = !state.ready || Boolean(issue) || locked || state.loadingThreads;
+  const publishDisabled = privateDraft || !state.ready || Boolean(issue) || locked || state.loadingThreads;
+  byId('start-publish').disabled = publishDisabled || Boolean(state.ready?.thread.topLevel);
+  byId('profile-publish').disabled = publishDisabled;
+  byId('start-publish').hidden = privateDraft;
+  byId('profile-publish').hidden = privateDraft;
+  byId('refresh-history').hidden = privateDraft;
+  byId('history-records').hidden = privateDraft;
+  byId('history-title').textContent = privateDraft ? '초안 미리보기' : '실행하기';
+  byId('history-intro').textContent = privateDraft ? '확정한 댓글 문구를 확인합니다.' : '확정한 답글 한 건을 게시하고 결과를 기록합니다.';
+  byId('publish-target-caption').textContent = privateDraft ? '댓글 초안' : '게시 대상';
   byId('choose-publish-target').disabled = locked;
+  byId('choose-publish-target').textContent = privateDraft ? '초안으로 돌아가기' : '선택하기';
   byId('publish-target-label').textContent = state.ready
     ? state.video.title + ' · ' + state.ready.thread.author
-    : '03번에서 게시할 답글을 확정하세요.';
+    : privateDraft ? '03번에서 댓글 초안을 확정하세요.' : '03번에서 게시할 답글을 확정하세요.';
   byId('publish-target-text').textContent = state.ready?.text ?? '';
   byId('publish-target-text').hidden = !state.ready;
   status('publish-target-hint', issue);
@@ -1104,6 +1173,11 @@ byId('choose-publish-target').addEventListener('click', () => {
     showScreen('generate');
     return;
   }
+  if (state.video.privateDraft) {
+    showScreen('video');
+    byId('write-video-comment').focus();
+    return;
+  }
   showScreen('comments');
   (state.selected?.row ?? byId('thread-list').querySelector('button.thread-row') ?? byId('reload-comments')).focus();
 });
@@ -1122,13 +1196,28 @@ replyText.addEventListener('input', () => {
 byId('video-url').addEventListener('paste', (event) => {
   const field = event.currentTarget;
   setTimeout(() => {
-    if (isVideoLink(field.value.trim())) field.form.requestSubmit();
+    if (!privateVideoOptions.open && isVideoLink(field.value.trim())) field.form.requestSubmit();
   }, 0);
 });
 
 byId('video-form').addEventListener('submit', (event) => {
   event.preventDefault();
   void loadVideo(byId('video-url').value.trim());
+});
+
+privateVideoOptions.addEventListener('toggle', () => {
+  const privateMode = privateVideoOptions.open;
+  byId('latest-public').hidden = privateMode;
+  byId('load-video').hidden = privateMode;
+  byId('video-hint').textContent = privateMode ? '내 영상의 링크를 입력한 뒤 아래에서 자막을 선택하세요.' :
+    '링크를 붙여넣으면 공개 영상 정보가 표시됩니다.';
+  if (privateMode) status('video-status');
+  renderReplyControls();
+});
+
+byId('private-video-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  void analyzePrivateVideo();
 });
 
 byId('save-reply').addEventListener('click', async () => {
@@ -1308,6 +1397,7 @@ byId('profile-confirm').addEventListener('click', () => {
 });
 
 async function publishInProfile() {
+  if (state.video?.privateDraft) return;
   const { thread, text } = state.ready;
   const topLevel = thread.topLevel === true;
   const payload = { ...replyPayload(thread, text), topLevel, requestId: crypto.randomUUID() };
