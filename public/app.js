@@ -15,7 +15,7 @@ const videoIdPattern = /^[A-Za-z0-9_-]{11}$/;
 const statusLabels = {
   draft: '작성 기록', posting: '게시 중', posted: '게시 완료', failed: '실패', uncertain: '확인 보류'
 };
-const audienceLabels = { neutral: '기본', female: '여성', male: '남성' };
+const toneTypeLabels = { neutral: '중립', female: '여성 말투', male: '남성 말투' };
 const draftVariantLabels = { clean: '깔끔한 버전', expressive: '의성어·의태어 버전' };
 const draftPartLabels = { video: '영상', empathy: '공감', cta: '운명원 연결' };
 const state = {
@@ -541,7 +541,7 @@ function generationButton(label, handler, primary = false) {
 }
 
 function settingsLabel(settings) {
-  return '온도 ' + settings.tone + ' / 5 · 답변 방향 ' + settings.message + ' / 5 · ' + audienceLabels[settings.audience];
+  return '말투 온도 ' + settings.tone + ' / 5 · 답변 방향 ' + settings.message + ' / 5 · 말투 유형 ' + toneTypeLabels[settings.audience];
 }
 
 function scoreSetting(label, start, end, value, change) {
@@ -569,9 +569,9 @@ function scoreSetting(label, start, end, value, change) {
 function individualSettings(entry) {
   const options = entry.options;
   const settings = node('div', 'generation-settings generation-card-settings');
-  const audience = node('fieldset', 'generation-audience');
+  const toneType = node('fieldset', 'generation-audience');
   const choices = node('div', 'choice-row');
-  for (const [value, label] of Object.entries(audienceLabels)) {
+  for (const [value, label] of Object.entries(toneTypeLabels)) {
     const choice = node('label');
     const radio = node('input');
     radio.type = 'radio';
@@ -583,11 +583,11 @@ function individualSettings(entry) {
     choice.append(radio, node('span', '', label));
     choices.append(choice);
   }
-  audience.append(node('legend', '', '읽는 대상'), choices);
+  toneType.append(node('legend', '', '말투 유형'), choices);
   settings.append(
     scoreSetting('말투 온도', '냉정함', '따뜻함', options.tone, (value) => { options.tone = value; }),
     scoreSetting('답변 방향', '공감', '해결', options.message, (value) => { options.message = value; }),
-    audience
+    toneType
   );
   return settings;
 }
