@@ -253,10 +253,10 @@ function requestGemini(input, instructions, format, maxTokens, geminiOnly) {
   };
 }
 
-function createModelRequester({ fetchImpl = fetch, geminiKey, geminiOnly = false } = {}) {
+function createModelRequester({ fetchImpl = fetch, geminiKey, getGeminiKey, geminiOnly = false } = {}) {
   let active = 0;
   return async function requestModel(input, instructions, format, maxTokens) {
-    const googleKey = process.env.GEMINI_API_KEY?.trim() || geminiKey?.trim();
+    const googleKey = process.env.GEMINI_API_KEY?.trim() || (getGeminiKey ? getGeminiKey() : geminiKey)?.trim();
     const openAiKey = geminiOnly ? undefined : process.env.OPENAI_API_KEY?.trim();
     if (!googleKey && !openAiKey) {
       const message = geminiOnly

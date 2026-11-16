@@ -2,6 +2,7 @@ const byId = (id) => document.getElementById(id);
 const nav = [...document.querySelectorAll('[data-screen]')];
 const dialog = byId('review-dialog');
 const generateDialog = byId('generate-dialog');
+const aiSettingsDialog = byId('ai-settings-dialog');
 const editor = byId('inline-reply');
 const replyText = byId('reply-text');
 const brandPositionInput = byId('brand-position');
@@ -99,6 +100,39 @@ async function api(path, body) {
   }
   return result;
 }
+
+byId('open-ai-settings').addEventListener('click', async () => {
+  const form = byId('ai-settings-form');
+  form.hidden = true;
+  status('ai-settings-status', 'Gemini 설정을 확인하고 있습니다…');
+  aiSettingsDialog.showModal();
+  try {
+    const result = await api('/api/ai/settings');
+    form.hidden = !result.editable;
+    status('ai-settings-status', result.configured ? 'Gemini 키가 등록되어 있습니다.'
+      : result.editable ? 'AI 작성에 사용할 키를 등록해 주세요.' : '이 환경에서는 Gemini 키를 서버 환경변수로 설정합니다.');
+  } catch (error) {
+    status('ai-settings-status', error.message, 'error');
+  }
+});
+
+byId('close-ai-settings').addEventListener('click', () => aiSettingsDialog.close());
+aiSettingsDialog.addEventListener('close', () => { byId('gemini-key').value = ''; });
+byId('ai-settings-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const field = byId('gemini-key');
+  const submit = byId('save-ai-settings');
+  field.disabled = submit.disabled = true;
+  try {
+    await api('/api/ai/settings', { key: field.value });
+    field.value = '';
+    status('ai-settings-status', 'Gemini 키를 저장했습니다.', 'success');
+  } catch (error) {
+    status('ai-settings-status', error.message, 'error');
+  } finally {
+    field.disabled = submit.disabled = false;
+  }
+});
 
 function showScreen(screen) {
   if (state.loadingVideo || state.loadingLatest || state.analyzingVideo || state.generating) return;

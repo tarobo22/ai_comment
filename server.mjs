@@ -7,7 +7,7 @@ import { createGoogleSession, createYouTube } from './google.mjs';
 import { createStore, publicRecord, StudioError } from './store.mjs';
 import { createPublicReader } from './public-reader.mjs';
 import { createDraftGenerator, createVideoAnalyzer } from './ai.mjs';
-import { loadLocalGeminiKey } from './local-gemini-key.mjs';
+import { canSaveLocalGeminiKey, loadLocalGeminiKey, saveLocalGeminiKey } from './local-gemini-key.mjs';
 
 const appDir = fileURLToPath(new URL('.', import.meta.url));
 const workspaceDataDir = resolve(appDir, '../../work/unmyeongwon-studio-data');
@@ -287,6 +287,7 @@ export async function startStudio({
   publicReader = createPublicReader(),
   geminiKey,
   geminiOnly = false,
+  saveGeminiKey,
 } = {}) {
   // Keep the browser files on the same running version as the API routes.
   const staticFiles = new Map(await Promise.all(Array.from(fileRoutes, async ([route, [name, type]]) => {
@@ -297,7 +298,7 @@ export async function startStudio({
   let googleSession;
   const session = () => googleSession ??= createGoogleSession({ dataDir, fetchImpl });
   const youtube = createYouTube({ fetchImpl });
-  const modelOptions = { fetchImpl, geminiKey, geminiOnly };
+  const modelOptions = { fetchImpl, getGeminiKey: () => geminiKey, geminiOnly };
   const generateDraft = createDraftGenerator(modelOptions);
   const analyzeVideo = createVideoAnalyzer(modelOptions);
   const videoAnalyses = new Map();
@@ -405,6 +406,26 @@ export async function startStudio({
     }
     if (method === 'GET' && url.pathname === '/api/session') return output(response, 200, await session().status());
     if (method === 'GET' && url.pathname === '/api/history') return output(response, 200, store.history());
+    if (url.pathname === '/api/ai/settings') {
+      const externalKey = process.env.GEMINI_API_KEY?.trim();
+      const editable = Boolean(saveGeminiKey && !externalKey);
+      if (method === 'GET') return output(response, 200, { configured: Boolean(externalKey || geminiKey), editable });
+      if (method === 'POST') {
+        if (!editable) throw new StudioError(409, 'aiSettingsUnavailable', '이 환경에서는 앱에서 Gemini 키를 변경할 수 없습니다.');
+        const body = await readBody(request);
+        const key = typeof body.key === 'string' ? body.key.trim() : '';
+        if (!/^[A-Za-z0-9][A-Za-z0-9._-]{15,255}$/.test(key)) {
+          throw new StudioError(400, 'invalidAiKey', 'Google AI Studio에서 복사한 Gemini API 키를 입력해 주세요.');
+        }
+        try {
+          await saveGeminiKey(key);
+        } catch {
+          throw new StudioError(500, 'aiKeySaveFailed', '이 Windows 계정에 Gemini 키를 저장하지 못했습니다.');
+        }
+        geminiKey = key;
+        return output(response, 200, { configured: true, editable: true });
+      }
+    }
     if (method === 'GET' && url.pathname === '/api/public/latest') {
       return output(response, 200, await publicReader.latestVideos());
     }
@@ -559,9 +580,18 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
     const geminiKey = await loadLocalGeminiKey().catch(() => {
       console.warn('저장한 Gemini API 키를 읽을 수 없습니다. Windows 계정이나 키 설정을 확인해 주세요.');
     });
-    const studio = await startStudio({ geminiKey, geminiOnly: true });
+    const saveGeminiKey = canSaveLocalGeminiKey() ? saveLocalGeminiKey : undefined;
+    const studio = await startStudio({ geminiKey, geminiOnly: true, saveGeminiKey });
     console.log(`운명원 댓글 작업실 ${studio.origin.replace('127.0.0.1', 'localhost')}`);
-    for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => studio.close());
+    const shutdown = () => {
+      if (process.env.STUDIO_MANAGED_LAUNCHER === '1') process.stdin.pause();
+      studio.close().catch(() => { process.exitCode = 1; });
+    };
+    for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, shutdown);
+    if (process.env.STUDIO_MANAGED_LAUNCHER === '1') {
+      process.stdin.once('end', shutdown);
+      process.stdin.resume();
+    }
   } catch (error) {
     const message = error?.code === 'EADDRINUSE'
       ? '이 포트는 이미 사용 중입니다. 이전 댓글 스튜디오가 열려 있다면 종료한 뒤 다시 실행해 주세요.'

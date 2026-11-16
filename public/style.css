@@ -148,6 +148,7 @@ button.thread-row:hover, .thread-row[aria-expanded="true"] { background: var(--q
 .generation-settings { display: grid; gap: 10px; }
 .generation-prompt { display: grid; gap: 5px; margin-top: 10px; }
 .generation-prompt label { font-size: 13px; font-weight: 700; }
+.ai-settings-actions { margin-top: 10px; }
 #generate-settings { margin-top: 12px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--quiet); }
 .score-heading, .score-track { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .score-heading, .generation-audience legend { font-size: 13px; font-weight: 700; }
