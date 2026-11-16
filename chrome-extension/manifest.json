@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "운명원 댓글 스튜디오 Chrome 연결",
+  "description": "선택한 Chrome 프로필에서 확정한 YouTube 댓글을 입력하고 게시 결과를 확인합니다.",
+  "version": "1.1.0",
+  "minimum_chrome_version": "102",
+  "permissions": ["storage"],
+  "host_permissions": ["https://www.youtube.com/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["http://localhost/*", "http://127.0.0.1/*"],
+      "js": ["studio.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.youtube.com/watch*"],
+      "js": ["youtube.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

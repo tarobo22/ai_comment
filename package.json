@@ -1,0 +1,14 @@
+{
+  "name": "ai_comment",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "playwright": "1.62.1"
+  }
+}

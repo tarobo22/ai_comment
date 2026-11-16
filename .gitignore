@@ -1,0 +1,14 @@
+/node_modules/
+/.studio-data/
+/work/
+.env
+.env.*
+google-session.json
+client_secret*.json
+*.dpapi
+*.sqlite*
+*.db
+*.db-shm
+*.db-wal
+*.pem
+npm-debug.log*
